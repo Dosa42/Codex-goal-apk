@@ -13,6 +13,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.service.TermuxLauncher
+import com.example.service.ExecServerService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.example.ui.MainScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
@@ -44,6 +47,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        lifecycleScope.launch {
+            val repo = (application as CodexGoalApplication).repository
+            if (repo.isConnectionDesired() && ExecServerService.activeClient == null) {
+                try { ExecServerService.startService(this@MainActivity) }
+                catch (e: Exception) { repo.recordEvent("IN", "START_FAILURE", e.message ?: "Start failed", e.toString()) }
+            }
+        }
 
         // Request POST_NOTIFICATIONS on Android 13+ for foreground service notifications
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

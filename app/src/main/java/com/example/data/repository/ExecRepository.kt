@@ -25,7 +25,7 @@ class ExecRepository(private val db: AppDatabase) {
     }
 
     suspend fun isConnectionDesired(): Boolean {
-        return db.settingDao().get(KEY_CONNECTION_DESIRED) == "true"
+        return db.settingDao().get(KEY_CONNECTION_DESIRED) != "false"
     }
 
     suspend fun setConnectionDesired(desired: Boolean) {
@@ -152,6 +152,20 @@ class ExecRepository(private val db: AppDatabase) {
     suspend fun getActiveProcessesForSession(sessionId: String): List<ProcessEntity> {
         return db.processDao().getActiveProcessesForSession(sessionId)
     }
+
+    suspend fun getCatchupProcesses(sessionId: String): List<ProcessEntity> =
+        db.processDao().getProcessesForSession(sessionId).filter {
+            db.settingDao().get("outputComplete:${it.processId}") != "true"
+        }
+
+    suspend fun getAllProcesses(): List<ProcessEntity> = db.processDao().getAllProcesses()
+
+    suspend fun setOutputComplete(processId: String, complete: Boolean) {
+        putSetting("outputComplete:$processId", complete.toString())
+    }
+
+    suspend fun putSetting(key: String, value: String) = db.settingDao().set(SettingEntity(key, value))
+    suspend fun getSetting(key: String): String? = db.settingDao().get(key)
 
     // Output Chunks & Dedup with Contiguous Cursor
     suspend fun recordChunk(processId: String, seq: Long, stream: String, chunkBase64: String): Boolean {

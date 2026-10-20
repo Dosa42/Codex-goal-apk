@@ -16,6 +16,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.FileDescriptor
+import java.io.PrintWriter
+import org.json.JSONArray
+import org.json.JSONObject
 
 class ExecServerService : Service() {
 
@@ -24,6 +30,7 @@ class ExecServerService : Service() {
 
     private lateinit var repository: ExecRepository
     private lateinit var client: CodexWebSocketClient
+    private val commandMutex = Mutex()
 
     companion object {
         const val ACTION_START = "com.dosa42.codexgoal.ACTION_START"
@@ -35,9 +42,9 @@ class ExecServerService : Service() {
         private const val NOTIFICATION_ID = 4001
         private const val CHANNEL_ID = "codex_exec_server_channel"
 
-        @Volatile
-        private var _activeClient: CodexWebSocketClient? = null
-        val activeClient: CodexWebSocketClient? get() = _activeClient
+        private val _activeClient = MutableStateFlow<CodexWebSocketClient?>(null)
+        val activeClientFlow: StateFlow<CodexWebSocketClient?> = _activeClient.asStateFlow()
+        val activeClient: CodexWebSocketClient? get() = _activeClient.value
 
         @Volatile
         private var _activeRepository: ExecRepository? = null
@@ -79,7 +86,7 @@ class ExecServerService : Service() {
         repository = ExecRepository(db)
         client = CodexWebSocketClient(repository, serviceScope)
 
-        _activeClient = client
+        _activeClient.value = client
         _activeRepository = repository
         _isRunning.value = true
 
@@ -107,6 +114,7 @@ class ExecServerService : Service() {
         val endpointExtra = intent?.getStringExtra(EXTRA_ENDPOINT)
 
         serviceScope.launch {
+          commandMutex.withLock {
             val endpoint = endpointExtra ?: repository.getEndpoint()
 
             // If intent is null (sticky restart), honor connectionDesired
@@ -140,6 +148,7 @@ class ExecServerService : Service() {
                     stopSelf()
                 }
             }
+          }
         }
 
         return START_STICKY
@@ -152,7 +161,54 @@ class ExecServerService : Service() {
         client.stop()
         serviceJob.cancel()
         _isRunning.value = false
-        _activeClient = null
+        _activeClient.value = null
+        _activeRepository = null
+    }
+
+    override fun dump(fd: FileDescriptor, writer: PrintWriter, args: Array<out String>) {
+        val state = JSONObject()
+        state.put("timestamp", System.currentTimeMillis())
+        state.put("connectionState", client.connectionState.value.name)
+        state.put("lastError", client.lastError.value ?: JSONObject.NULL)
+        state.put("sessionId", client.currentSessionId.value ?: JSONObject.NULL)
+        state.put("socketGeneration", client.socketGeneration)
+        state.put("pendingRpcCount", client.pendingRpcCount)
+        state.put("observedEnvironment", client.observedEnvironment.value?.let { env ->
+            JSONObject().apply {
+                put("cwd", env.cwd ?: JSONObject.NULL)
+                put("userHomeDir", env.userHomeDir ?: JSONObject.NULL)
+                put("platformOs", env.platformOs ?: JSONObject.NULL)
+                put("executorVersion", env.executorVersion ?: JSONObject.NULL)
+                put("shell", JSONObject().put("name", env.shell?.name ?: JSONObject.NULL).put("path", env.shell?.path ?: JSONObject.NULL))
+                put("capabilities", JSONObject(env.capabilities ?: emptyMap<String, Boolean>()))
+            }
+        } ?: JSONObject.NULL)
+        try {
+            runBlocking(Dispatchers.IO) {
+                withTimeout(2500) {
+                    state.put("endpoint", repository.getEndpoint())
+                    state.put("connectionDesired", repository.isConnectionDesired())
+                    val report = repository.getSetting("lastAcceptanceReport")
+                    state.put("lastAcceptanceReport", report?.let { JSONObject(it) } ?: JSONObject.NULL)
+                    val processes = JSONArray()
+                    for (p in repository.getAllProcesses()) {
+                        processes.put(JSONObject().apply {
+                            put("processId", p.processId); put("sessionId", p.sessionId)
+                            put("title", p.title); put("status", p.status)
+                            put("exitCode", p.exitCode ?: JSONObject.NULL)
+                            put("lastConsumedSeq", p.lastConsumedSeq ?: JSONObject.NULL)
+                            put("deliveryUncertain", p.deliveryUncertain)
+                            put("lastReadResult", repository.getSetting("processResult:${p.processId}")?.let { JSONObject(it) } ?: JSONObject.NULL)
+                        })
+                    }
+                    state.put("processes", processes)
+                }
+            }
+        } catch (e: Exception) {
+            state.put("dumpError", e.message ?: e.javaClass.name)
+        }
+        writer.println("CODEX_GOAL_STATE")
+        writer.println(state.toString())
     }
 
     private fun createNotificationChannel() {

@@ -36,7 +36,9 @@ class CodexWebSocketClient(
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val rpcTimeoutMs: Long = 10000,
+    private val retryBaseMs: Long = 1000
 ) {
     private val TAG = "CodexWebSocketClient"
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -55,6 +57,8 @@ class CodexWebSocketClient(
 
     private var webSocket: WebSocket? = null
     private val currentGeneration = AtomicLong(0)
+    val socketGeneration: Long get() = currentGeneration.get()
+    val pendingRpcCount: Int get() = pendingRequests.size
     private val requestIdCounter = AtomicLong(1)
 
     private val pendingRequests = ConcurrentHashMap<Long, CompletableDeferred<JSONObject>>()
@@ -132,10 +136,10 @@ class CodexWebSocketClient(
                     webSocket.close(1000, "Stale generation")
                     return
                 }
-                reconnectAttempt = 0
-                _connectionState.value = ConnectionState.INITIALIZING
                 scope.launch {
                     if (currentGeneration.get() != generation) return@launch
+                    reconnectAttempt = 0
+                    _connectionState.value = ConnectionState.INITIALIZING
                     repository.recordEvent("IN", "OPEN", "WebSocket transport opened", response.message)
                     performHandshake(endpoint, generation, webSocket)
                 }
@@ -169,7 +173,7 @@ class CodexWebSocketClient(
                     if (currentGeneration.get() != generation) return@launch
                     repository.recordEvent("IN", "CLOSED", "WebSocket closed code=$code", reason)
                 }
-                handleDisconnect(endpoint, "Closed: $reason ($code)", generation)
+                scope.launch { handleDisconnect(endpoint, "Closed: $reason ($code)", generation) }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -180,7 +184,7 @@ class CodexWebSocketClient(
                     if (currentGeneration.get() != generation) return@launch
                     repository.recordEvent("IN", "FAILURE", "WebSocket failure", errorMsg)
                 }
-                handleDisconnect(endpoint, errorMsg, generation)
+                scope.launch { handleDisconnect(endpoint, errorMsg, generation) }
             }
         }
 
@@ -189,7 +193,8 @@ class CodexWebSocketClient(
 
     private fun handleDisconnect(endpoint: String, reason: String, generation: Long) {
         if (currentGeneration.get() != generation) return
-        failPendingRequests(reason)
+        closeCurrentSocket(reason)
+        val retryGeneration = currentGeneration.get()
         _lastError.value = reason
 
         if (isUserStopped) {
@@ -200,13 +205,13 @@ class CodexWebSocketClient(
         // Bounded exponential backoff with unlimited retry while enabled
         _connectionState.value = ConnectionState.ERROR
         reconnectAttempt++
-        val delayMs = min(5000L, 1000L * (1 shl min(reconnectAttempt, 4)))
+        val delayMs = min(5000L, retryBaseMs * (1 shl min(reconnectAttempt, 4)))
         Log.i(TAG, "Scheduling reconnect attempt $reconnectAttempt in ${delayMs}ms")
 
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(delayMs)
-            if (!isUserStopped && currentGeneration.get() == generation) {
+            if (!isUserStopped && currentGeneration.get() == retryGeneration) {
                 connectInternal(endpoint)
             }
         }
@@ -216,6 +221,13 @@ class CodexWebSocketClient(
         if (currentGeneration.get() != generation) return
 
         val lastSession = repository.getLatestSession()
+        if (currentGeneration.get() != generation) return
+        if (!forceFreshSession && lastSession?.endpoint == endpoint && lastSession.status == "SESSION_LOST") {
+            _connectionState.value = ConnectionState.SESSION_LOST
+            _lastError.value = "Previous session is lost. Choose New Session to continue."
+            closeCurrentSocket("Explicit new session required")
+            return
+        }
         // Resume scope: same endpoint AND non-lost session
         val shouldAttemptResume = !forceFreshSession &&
                 lastSession != null &&
@@ -280,6 +292,7 @@ class CodexWebSocketClient(
 
             // Save new/resumed session
             repository.saveSession(initResult, endpoint)
+            if (currentGeneration.get() != generation) return
             _currentSessionId.value = newSessionId
             forceFreshSession = false
 
@@ -303,7 +316,6 @@ class CodexWebSocketClient(
             if (currentGeneration.get() != generation) return
             _connectionState.value = ConnectionState.ERROR
             _lastError.value = "Initialize failed: ${e.message}"
-            closeCurrentSocket("Handshake exception: ${e.message}")
             handleDisconnect(endpoint, e.message ?: "Handshake failed", generation)
         }
     }
@@ -336,22 +348,23 @@ class CodexWebSocketClient(
     }
 
     private suspend fun reconcileActiveProcesses(sessionId: String, generation: Long) {
-        val activeProcesses = repository.getActiveProcessesForSession(sessionId)
+        val activeProcesses = repository.getCatchupProcesses(sessionId)
         for (proc in activeProcesses) {
             if (currentGeneration.get() != generation) return
             try {
                 var cursor = proc.lastConsumedSeq
                 var progressMade = true
-                var iterations = 0
 
                 // Paginate catchup until no further chunks returned
-                while (progressMade && iterations < 50 && currentGeneration.get() == generation) {
-                    iterations++
+                while (progressMade && currentGeneration.get() == generation) {
                     val readResult = readProcessCatchup(proc.processId, cursor)
+                    if (currentGeneration.get() != generation) return
                     val newCursor = repository.getProcess(proc.processId)?.lastConsumedSeq
                     progressMade = (readResult.chunks.isNotEmpty() && newCursor != cursor)
+                    if (readResult.chunks.isNotEmpty() && newCursor == cursor) {
+                        repository.recordEvent("IN", "OUTPUT_GAP", "Output did not advance for ${proc.processId}", "afterSeq=$cursor")
+                    }
                     cursor = newCursor
-                    if (readResult.closed || readResult.exited) break
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error catching up process ${proc.processId}", e)
@@ -391,6 +404,7 @@ class CodexWebSocketClient(
                 val stream = params.getString("stream")
                 val chunk = params.getString("chunk")
                 repository.recordChunk(processId, seq, stream, chunk)
+                repository.setOutputComplete(processId, false)
             }
             "process/exited" -> {
                 val processId = params.getString("processId")
@@ -420,13 +434,14 @@ class CodexWebSocketClient(
         cwd: String? = null,
         env: Map<String, String>? = null,
         tty: Boolean = true,
-        title: String = argv.firstOrNull() ?: "Process"
+        title: String = argv.firstOrNull() ?: "Process",
+        processId: String = UUID.randomUUID().toString()
     ): Result<ProcessStartParams> {
         val gen = currentGeneration.get()
+        try { ensureInitialized(gen) } catch (e: Exception) { return Result.failure(e) }
         val sessId = _currentSessionId.value ?: return Result.failure(IllegalStateException("No active session"))
         val ws = webSocket ?: return Result.failure(IOException("WebSocket is not connected"))
 
-        val processId = UUID.randomUUID().toString()
 
         // 1. Transactionally record the process as STARTING in repository
         repository.createProcess(
@@ -450,7 +465,9 @@ class CodexWebSocketClient(
         )
 
         return try {
+            ensureInitialized(gen)
             val response = sendRpcRequestInternal("process/start", params, ws, gen)
+            ensureInitialized(gen)
             if (response.has("error")) {
                 val err = response.getJSONObject("error").optString("message", "process/start rejected")
                 repository.setProcessExited(processId, -1)
@@ -469,6 +486,7 @@ class CodexWebSocketClient(
 
     suspend fun readProcessCatchup(processId: String, afterSeq: Long?): ProcessReadResult {
         val gen = currentGeneration.get()
+        ensureInitialized(gen)
         val ws = webSocket ?: throw IOException("WebSocket is not connected")
 
         val params = ProcessReadParams(
@@ -478,6 +496,7 @@ class CodexWebSocketClient(
             waitMs = 500
         )
         val response = sendRpcRequestInternal("process/read", params, ws, gen)
+        ensureInitialized(gen)
         if (response.has("error")) {
             val err = response.getJSONObject("error").optString("message", "process/read error")
             throw IOException(err)
@@ -510,6 +529,9 @@ class CodexWebSocketClient(
 
         // Deduplicate chunks transactionally with contiguous cursor computation
         repository.recordChunksBatch(processId, chunkList)
+        ensureInitialized(gen)
+        val metadata = JSONObject(resultObj.toString()).apply { remove("chunks") }
+        repository.putSetting("processResult:$processId", metadata.toString())
 
         if (exited) {
             repository.setProcessExited(processId, exitCode)
@@ -517,6 +539,7 @@ class CodexWebSocketClient(
         if (closed) {
             repository.setProcessClosed(processId)
         }
+        repository.setOutputComplete(processId, (exited || closed) && chunkList.isEmpty())
 
         return ProcessReadResult(
             chunks = chunkList,
@@ -531,6 +554,7 @@ class CodexWebSocketClient(
 
     suspend fun writeProcess(processId: String, rawBytes: ByteArray): WriteStatus {
         val gen = currentGeneration.get()
+        try { ensureInitialized(gen) } catch (e: Exception) { return WriteStatus.Failed(e.message ?: "Not initialized") }
         val ws = webSocket ?: return WriteStatus.Failed("WebSocket is not connected")
 
         val base64Chunk = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
@@ -543,12 +567,14 @@ class CodexWebSocketClient(
 
         return try {
             val response = sendRpcRequestInternal("process/write", params, ws, gen)
+            ensureInitialized(gen)
             if (response.has("error")) {
                 val err = response.getJSONObject("error").optString("message", "write error")
                 WriteStatus.Failed(err)
             } else {
                 val res = response.optJSONObject("result")
-                val statusStr = res?.optString("status") ?: res?.keys()?.asSequence()?.firstOrNull() ?: "accepted"
+                val statusStr = res?.optString("status", "") ?: ""
+                if (statusStr.isEmpty()) return WriteStatus.Failed("Malformed process/write response: missing status")
                 when (statusStr.lowercase()) {
                     "accepted" -> WriteStatus.Accepted
                     "starting" -> WriteStatus.Starting
@@ -564,6 +590,7 @@ class CodexWebSocketClient(
 
     suspend fun signalProcess(processId: String, signal: String): Result<Boolean> {
         val gen = currentGeneration.get()
+        try { ensureInitialized(gen) } catch (e: Exception) { return Result.failure(e) }
         val ws = webSocket ?: return Result.failure(IOException("WebSocket is not connected"))
 
         if (signal != "interrupt") {
@@ -573,7 +600,9 @@ class CodexWebSocketClient(
         val params = ProcessSignalParams(processId = processId, signal = signal)
         return try {
             val response = sendRpcRequestInternal("process/signal", params, ws, gen)
-            Result.success(!response.has("error"))
+            ensureInitialized(gen)
+            if (response.has("error")) Result.failure(IOException(response.getJSONObject("error").optString("message", "Signal rejected")))
+            else Result.success(true)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -581,11 +610,13 @@ class CodexWebSocketClient(
 
     suspend fun terminateProcess(processId: String): Result<Boolean> {
         val gen = currentGeneration.get()
+        try { ensureInitialized(gen) } catch (e: Exception) { return Result.failure(e) }
         val ws = webSocket ?: return Result.failure(IOException("WebSocket is not connected"))
 
         val params = ProcessTerminateParams(processId = processId)
         return try {
             val response = sendRpcRequestInternal("process/terminate", params, ws, gen)
+            ensureInitialized(gen)
             if (response.has("error")) {
                 val err = response.getJSONObject("error").optString("message", "terminate error")
                 Result.failure(IOException(err))
@@ -594,7 +625,7 @@ class CodexWebSocketClient(
                 if (!running) {
                     repository.setProcessClosed(processId)
                 }
-                Result.success(!running)
+                Result.success(running)
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -631,7 +662,13 @@ class CodexWebSocketClient(
         pendingRequests[id] = deferred
 
         val jsonStr = json.toString()
+        return try {
         repository.recordEvent("OUT", method, "RPC Call $method id=$id", jsonStr)
+
+        if (currentGeneration.get() != capturedGen) {
+            pendingRequests.remove(id)
+            throw IOException("Stale generation after recording RPC")
+        }
 
         val sent = capturedWs.send(jsonStr)
         if (!sent) {
@@ -639,8 +676,7 @@ class CodexWebSocketClient(
             throw IOException("Failed to send WebSocket frame for $method (send returned false)")
         }
 
-        return try {
-            withTimeout(10000) {
+            withTimeout(rpcTimeoutMs) {
                 deferred.await()
             }
         } finally {
@@ -670,6 +706,7 @@ class CodexWebSocketClient(
         }
         val jsonStr = json.toString()
         repository.recordEvent("OUT", method, "Notification $method", jsonStr)
+        if (currentGeneration.get() != capturedGen) return false
         return capturedWs.send(jsonStr)
     }
 }

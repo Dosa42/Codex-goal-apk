@@ -53,6 +53,7 @@ class CodexWebSocketClientTest {
     @After
     fun tearDown() {
         client.stop()
+        scope.cancel()
         server.shutdown()
         db.close()
     }
@@ -381,24 +382,95 @@ class CodexWebSocketClientTest {
     }
 
     @Test
-    fun testUtf8SplitAcrossChunksDecode() {
-        // Multi-byte UTF-8 string: "Hello \uD83D\uDE80 World" (Rocket emoji 🚀 is 4 bytes: F0 9F 9A 80)
-        val text = "Hello 🚀 World"
-        val bytes = text.toByteArray(StandardCharsets.UTF_8)
-
-        // Split across boundary right in the middle of the 4-byte rocket emoji:
-        // "Hello " is 6 bytes. Byte 6,7,8,9 are the rocket.
-        // Split at index 8 (first 2 bytes of emoji in chunk 1, last 2 bytes in chunk 2)
-        val chunk1Bytes = bytes.copyOfRange(0, 8)
-        val chunk2Bytes = bytes.copyOfRange(8, bytes.size)
-
-        // When concatenated in a continuous byte stream (as done by xterm.js terminal.write(Uint8Array)),
-        // the stream is 100% losslessly preserved
-        val outputStream = ByteArrayOutputStream()
-        outputStream.write(chunk1Bytes)
-        outputStream.write(chunk2Bytes)
-
-        val reconstructed = String(outputStream.toByteArray(), StandardCharsets.UTF_8)
-        assertEquals("Continuous binary stream must reconstruct exact UTF-8 without corruption", text, reconstructed)
+    fun testMutationRejectedBeforeInitializeWithoutCreatingProcess() = runBlocking {
+        assertTrue(client.startProcess(listOf("sh"), tty = false).isFailure)
+        assertTrue(repository.getAllProcesses().isEmpty())
+        assertTrue(client.writeProcess("missing", byteArrayOf(1)) is WriteStatus.Failed)
+        assertEquals(0, client.pendingRpcCount)
     }
+
+    @Test
+    fun testHandshakeTimeoutRetriesWithCleanPendingMap() = runBlocking {
+        client.stop()
+        client = CodexWebSocketClient(repository, scope, rpcTimeoutMs = 200, retryBaseMs = 25)
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val j = JSONObject(text)
+                if (j.optString("method") == "initialize") {
+                    webSocket.send(JSONObject().put("id", j.getLong("id"))
+                        .put("result", JSONObject().put("sessionId", "retry-success")).toString())
+                }
+            }
+        }))
+        client.start(server.url("/").toString().replace("http://", "ws://"))
+        withTimeout(5000) {
+            while (client.connectionState.value != ConnectionState.INITIALIZED) delay(20)
+        }
+        assertEquals("retry-success", client.currentSessionId.value)
+        assertEquals(0, client.pendingRpcCount)
+    }
+
+    @Test
+    fun testAutomaticCatchupDrainsExitedOutputLargerThanPage() = runBlocking {
+        val pid = "large-exited-process"
+        val sid = "large-exited-session"
+        val url = server.url("/").toString().replace("http://", "ws://")
+        repository.saveSession(InitializeResult(sid), url)
+        repository.createProcess(pid, sid, "Large", listOf("sh"), null, null, false)
+        repository.setProcessExited(pid, 7)
+        val calls = java.util.concurrent.atomic.AtomicInteger(0)
+        val first = android.util.Base64.encodeToString(ByteArray(65536) { 65 }, android.util.Base64.NO_WRAP)
+        val second = android.util.Base64.encodeToString(ByteArray(32768) { 66 }, android.util.Base64.NO_WRAP)
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val j = JSONObject(text)
+                val method = j.optString("method")
+                val result = when (method) {
+                    "initialize" -> JSONObject().put("sessionId", sid)
+                    "process/read" -> {
+                        calls.incrementAndGet()
+                        val p = j.getJSONObject("params")
+                        val cursor = if (p.isNull("afterSeq")) 0L else p.getLong("afterSeq")
+                        val chunks = JSONArray()
+                        if (cursor == 0L) chunks.put(JSONObject().put("seq", 1).put("stream", "stdout").put("chunk", first))
+                        if (cursor == 1L) chunks.put(JSONObject().put("seq", 2).put("stream", "stderr").put("chunk", second))
+                        JSONObject().put("chunks", chunks).put("nextSeq", 3).put("exited", true)
+                            .put("exitCode", 7).put("closed", true)
+                    }
+                    else -> null
+                }
+                if (result != null) webSocket.send(JSONObject().put("id", j.getLong("id")).put("result", result).toString())
+            }
+        }))
+        client.start(url)
+        withTimeout(5000) {
+            while (repository.getSetting("outputComplete:$pid") != "true") delay(20)
+        }
+        assertEquals(3, calls.get())
+        assertEquals(2L, repository.getProcess(pid)?.lastConsumedSeq)
+        val chunks = repository.getChunks(pid)
+        assertEquals(listOf("stdout", "stderr"), chunks.map { it.stream })
+        assertEquals(98304, chunks.sumOf { android.util.Base64.decode(it.chunkBase64, android.util.Base64.NO_WRAP).size })
+        assertEquals(7, repository.getProcess(pid)?.exitCode)
+    }
+
+    @Test
+    fun testMalformedWriteResponseIsFailure() = runBlocking {
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val j = JSONObject(text)
+                val result = when (j.optString("method")) {
+                    "initialize" -> JSONObject().put("sessionId", "malformed-write")
+                    "process/write" -> JSONObject()
+                    else -> null
+                }
+                if (result != null) webSocket.send(JSONObject().put("id", j.getLong("id")).put("result", result).toString())
+            }
+        }))
+        client.start(server.url("/").toString().replace("http://", "ws://"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(20) }
+        assertTrue(client.writeProcess("process", byteArrayOf(65)) is WriteStatus.Failed)
+    }
+
 }

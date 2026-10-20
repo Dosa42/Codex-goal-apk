@@ -1,104 +1,49 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Codex Goal Terminal</title>
-    <link rel="stylesheet" href="xterm.css" />
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #0d1117;
-            overflow: hidden;
-        }
-        #terminal-container {
-            width: 100%;
-            height: 100%;
-            padding: 4px;
-            box-sizing: border-box;
-        }
-        .xterm {
-            height: 100%;
-        }
-    </style>
-</head>
-<body>
-    <div id="terminal-container"></div>
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="xterm.css">
+<style>html,body,#terminal-container{margin:0;width:100%;height:100%;background:#0d1117;overflow:hidden}</style>
+</head><body><div id="terminal-container"></div>
+<script>window.onerror=function(message){window.AndroidBridge?.onError(String(message));};</script>
+<script src="xterm.js"></script><script>
+/* Renderer cursor advances only after xterm consumes bytes. */
+(() => {
+  const term = new Terminal({cursorBlink:true, fontSize:13, cols:80, rows:24,
+    fontFamily:"monospace", theme:{background:"#0d1117",foreground:"#c9d1d9"}});
+  term.open(document.getElementById("terminal-container"));
+  let context = null, next = 1, busy = false, revision = 0;
+  const pending = new Map();
+  term.onData(data => {
+    const bytes = new TextEncoder().encode(data);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    window.AndroidBridge?.onData(btoa(binary));
+  });
+  function drain() {
+    if (busy || !pending.has(next)) return;
+    busy = true;
+    const seq = next, generation = revision, item = pending.get(seq);
+    const bytes = Uint8Array.from(atob(item.chunkBase64), c => c.charCodeAt(0));
+    term.write(bytes, () => {
+      if (generation !== revision) return;
+      pending.delete(seq);
+      next = seq + 1;
+      busy = false;
+      drain();
+    });
+  }
+  window.receiveChunks = (id, chunks) => {
+    if (context !== id) {
+      revision++; context = id; next = 1; busy = false; pending.clear(); term.reset();
+    }
+    for (const item of chunks) {
+      if (item.seq >= next && !pending.has(item.seq)) pending.set(item.seq, item);
+    }
+    drain();
+  };
+  window.terminalDiagnostics = () => ({context,next,busy,pending:[...pending.keys()],
+    text:Array.from({length:term.buffer.active.length},(_,i)=>term.buffer.active.getLine(i).translateToString(true)).join("\n")});
+  window.AndroidBridge?.onReady();
+})();
 
-    <script src="xterm.js"></script>
-    <script>
-        let term = null;
-        let activeProcessId = null;
-
-        function initTerminal() {
-            term = new Terminal({
-                cursorBlink: true,
-                convertEol: true,
-                fontSize: 13,
-                fontFamily: 'monospace',
-                theme: {
-                    background: '#0d1117',
-                    foreground: '#c9d1d9',
-                    cursor: '#58a6ff',
-                    selectionBackground: '#264f78',
-                    black: '#484f58',
-                    red: '#ff7b72',
-                    green: '#7ee787',
-                    yellow: '#f2cc60',
-                    blue: '#79c0ff',
-                    magenta: '#d2a8ff',
-                    cyan: '#56d4dd',
-                    white: '#f0f6fc'
-                }
-            });
-
-            const container = document.getElementById('terminal-container');
-            term.open(container);
-
-            term.onData(function(data) {
-                if (window.AndroidBridge && window.AndroidBridge.onData) {
-                    try {
-                        const b64 = btoa(unescape(encodeURIComponent(data)));
-                        window.AndroidBridge.onData(b64);
-                    } catch (e) {
-                        console.error("Failed to encode input", e);
-                    }
-                }
-            });
-
-            if (window.AndroidBridge && window.AndroidBridge.onReady) {
-                window.AndroidBridge.onReady();
-            }
-        }
-
-        function setProcessContext(processId) {
-            if (activeProcessId !== processId) {
-                activeProcessId = processId;
-                if (term) {
-                    term.reset();
-                }
-            }
-        }
-
-        function writeChunkBase64(base64Data, stream) {
-            if (!term) return;
-            try {
-                const binaryStr = atob(base64Data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
-                // xterm.js supports Uint8Array directly, preserving multi-byte UTF8 streams across chunk splits
-                term.write(bytes);
-            } catch (err) {
-                console.error("writeChunkBase64 error", err);
-            }
-        }
-
-        window.addEventListener('DOMContentLoaded', initTerminal);
-    </script>
-</body>
-</html>
+</script>
+</body></html>

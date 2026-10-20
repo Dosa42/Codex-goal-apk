@@ -2,7 +2,26 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
+import android.app.AlarmManager
+import android.app.AppOpsManager
+import android.app.NotificationManager
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.os.PowerManager
+import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,6 +73,8 @@ fun MainScreen(
     val observedEnv by viewModel.observedEnvironment.collectAsState()
     val healthStatus by viewModel.healthStatus.collectAsState()
     val termuxMsg by viewModel.termuxLaunchMessage.collectAsState()
+    val connectionError by viewModel.lastConnectionError.collectAsState()
+    val actionStatus by viewModel.lastWriteStatus.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var endpointInput by remember(endpoint) { mutableStateOf(endpoint) }
@@ -103,13 +124,11 @@ fun MainScreen(
                 endpoint = endpointInput,
                 onEndpointChange = { endpointInput = it },
                 onSaveAndConnect = {
-                    viewModel.updateEndpoint(endpointInput)
-                    viewModel.connect(context)
+                    viewModel.connect(context, endpointInput)
                 },
                 onReconnect = { viewModel.reconnect(context) },
                 onFreshSession = {
-                    viewModel.updateEndpoint(endpointInput)
-                    viewModel.connectFreshSession(context)
+                    viewModel.connectFreshSession(context, endpointInput)
                 },
                 onStop = { viewModel.stop(context) },
                 onCheckHealth = { viewModel.checkHealth() },
@@ -118,6 +137,10 @@ fun MainScreen(
             )
 
             // Session Lost Action Banner
+            connectionError?.let { Text(it, modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error) }
+            if (actionStatus?.startsWith("Error") == true) {
+                Text(actionStatus ?: "", modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
+            }
             if (connectionState == ConnectionState.SESSION_LOST) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -173,8 +196,9 @@ fun MainScreen(
             }
 
             // Navigation Tabs
-            PrimaryTabRow(
+            PrimaryScrollableTabRow(
                 selectedTabIndex = selectedTab,
+                edgePadding = 0.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Tab(
@@ -205,6 +229,13 @@ fun MainScreen(
                     icon = { Icon(Icons.Default.BugReport, contentDescription = null) },
                     modifier = Modifier.testTag("tab_diagnostics")
                 )
+                Tab(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    text = { Text("Permissions") },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    modifier = Modifier.testTag("tab_permissions")
+                )
             }
 
             // Tab Content
@@ -214,6 +245,7 @@ fun MainScreen(
                     1 -> RunCommandTab(viewModel)
                     2 -> ProtocolLogTab(viewModel)
                     3 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
+                    4 -> PermissionsTab()
                 }
             }
         }
@@ -983,6 +1015,184 @@ fun DiagnosticsTab(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class PermissionEntry(
+    val name: String,
+    val label: String,
+    val granted: Boolean,
+    val runtime: Boolean,
+    val special: Boolean,
+    val restricted: Boolean,
+    val status: String
+)
+
+private val specialPermissionNames = setOf(
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    "android.permission.MANAGE_MEDIA",
+    "android.permission.SYSTEM_ALERT_WINDOW",
+    "android.permission.WRITE_SETTINGS",
+    "android.permission.PACKAGE_USAGE_STATS",
+    "android.permission.REQUEST_INSTALL_PACKAGES",
+    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+    "android.permission.ACCESS_NOTIFICATION_POLICY",
+    "android.permission.SCHEDULE_EXACT_ALARM",
+    "android.permission.USE_FULL_SCREEN_INTENT"
+)
+
+private fun specialPermissionGranted(context: Context, name: String): Boolean = when (name) {
+    "android.permission.MANAGE_EXTERNAL_STORAGE" -> Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
+    "android.permission.MANAGE_MEDIA" -> Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(context)
+    "android.permission.SYSTEM_ALERT_WINDOW" -> Settings.canDrawOverlays(context)
+    "android.permission.WRITE_SETTINGS" -> Settings.System.canWrite(context)
+    "android.permission.REQUEST_INSTALL_PACKAGES" -> Build.VERSION.SDK_INT >= 26 && context.packageManager.canRequestPackageInstalls()
+    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" -> context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+    "android.permission.ACCESS_NOTIFICATION_POLICY" -> context.getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted
+    "android.permission.SCHEDULE_EXACT_ALARM" -> Build.VERSION.SDK_INT >= 31 && context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    "android.permission.USE_FULL_SCREEN_INTENT" -> if (Build.VERSION.SDK_INT >= 34) context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent() else ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED
+    "android.permission.PACKAGE_USAGE_STATS" -> {
+        val manager = context.getSystemService(AppOpsManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= 29) manager.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+            else manager.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        mode == AppOpsManager.MODE_ALLOWED
+    }
+    else -> false
+}
+
+@Suppress("DEPRECATION")
+private fun readPermissions(context: Context): List<PermissionEntry> {
+    val pm = context.packageManager
+    val pkg = pm.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+    return (pkg.requestedPermissions ?: emptyArray()).distinct().map { name ->
+        val info = runCatching { pm.getPermissionInfo(name, 0) }.getOrNull()
+        val base = info?.protectionLevel?.and(PermissionInfo.PROTECTION_MASK_BASE)
+        val special = name in specialPermissionNames
+        val granted = if (special) runCatching { specialPermissionGranted(context, name) }.getOrDefault(false)
+            else ContextCompat.checkSelfPermission(context, name) == PackageManager.PERMISSION_GRANTED
+        val restricted = Build.VERSION.SDK_INT >= 29 && info != null && (info.flags and PermissionInfo.FLAG_HARD_RESTRICTED) != 0
+        val status = when {
+            info == null -> "Not provided by this Android build or installed apps"
+            special -> if (granted) "Enabled in Android special access" else "Special access not enabled"
+            granted -> "Granted"
+            restricted -> "Not granted · installer or role restricted"
+            base == PermissionInfo.PROTECTION_DANGEROUS -> "Runtime permission not granted"
+            base == PermissionInfo.PROTECTION_SIGNATURE -> "Requires matching signer, role or system grant"
+            else -> "Declared · not granted"
+        }
+        PermissionEntry(name, info?.loadLabel(pm)?.toString() ?: name.substringAfterLast('.'), granted,
+            base == PermissionInfo.PROTECTION_DANGEROUS, special, restricted, status)
+    }.sortedWith(compareBy<PermissionEntry> { if (it.special) 0 else if (it.runtime) 1 else 2 }.thenBy { it.name })
+}
+
+private fun permissionSettingsIntent(context: Context, name: String): Intent {
+    val uri = Uri.parse("package:" + context.packageName)
+    val app = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
+    return when (name) {
+        "android.permission.MANAGE_EXTERNAL_STORAGE" -> if (Build.VERSION.SDK_INT >= 30) Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri) else app
+        "android.permission.MANAGE_MEDIA" -> if (Build.VERSION.SDK_INT >= 31) Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA, uri) else app
+        "android.permission.SYSTEM_ALERT_WINDOW" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, uri)
+        "android.permission.WRITE_SETTINGS" -> Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, uri)
+        "android.permission.REQUEST_INSTALL_PACKAGES" -> if (Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, uri) else app
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, uri)
+        "android.permission.ACCESS_NOTIFICATION_POLICY" -> Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+        "android.permission.SCHEDULE_EXACT_ALARM" -> if (Build.VERSION.SDK_INT >= 31) Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, uri) else app
+        "android.permission.USE_FULL_SCREEN_INTENT" -> if (Build.VERSION.SDK_INT >= 34) Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, uri) else app
+        "android.permission.PACKAGE_USAGE_STATS" -> Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, uri)
+        else -> app
+    }
+}
+
+@Composable
+private fun PermissionsTab() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var revision by remember { mutableIntStateOf(0) }
+    var entries by remember { mutableStateOf(emptyList<PermissionEntry>()) }
+    var query by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf<String?>(null) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        feedback = "Android returned " + results.count { it.value } + " granted / " + results.size + " requested. Current state is refreshed below."
+        revision++
+    }
+    LaunchedEffect(revision) {
+        try { entries = readPermissions(context) }
+        catch (e: Exception) { feedback = "Permission inspection failed: " + e.message }
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    fun openSettings(name: String) {
+        try { context.startActivity(permissionSettingsIntent(context, name)) }
+        catch (e: Exception) { feedback = "Android could not open this settings page: " + e.message }
+    }
+    fun request(entry: PermissionEntry) {
+        try {
+            when {
+                entry.special || entry.granted || !entry.runtime || entry.restricted -> openSettings(entry.name)
+                entry.name == "android.permission.ACCESS_BACKGROUND_LOCATION" -> {
+                    if (ContextCompat.checkSelfPermission(context, "android.permission.ACCESS_COARSE_LOCATION") != PackageManager.PERMISSION_GRANTED &&
+                        ContextCompat.checkSelfPermission(context, "android.permission.ACCESS_FINE_LOCATION") != PackageManager.PERMISSION_GRANTED) {
+                        feedback = "Grant foreground location first, then use Background location to select Allow all the time."
+                        launcher.launch(arrayOf("android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION"))
+                    } else if (Build.VERSION.SDK_INT >= 30) {
+                        feedback = "In Android App permissions → Location, select Allow all the time."
+                        openSettings(entry.name)
+                    } else launcher.launch(arrayOf(entry.name))
+                }
+                entry.name == "android.permission.BODY_SENSORS_BACKGROUND" -> {
+                    if (ContextCompat.checkSelfPermission(context, "android.permission.BODY_SENSORS") != PackageManager.PERMISSION_GRANTED) {
+                        feedback = "Grant body sensors first, then request background body sensors separately."
+                        launcher.launch(arrayOf("android.permission.BODY_SENSORS"))
+                    } else launcher.launch(arrayOf(entry.name))
+                }
+                entry.name == "android.permission.ACCESS_FINE_LOCATION" -> launcher.launch(arrayOf("android.permission.ACCESS_COARSE_LOCATION", entry.name))
+                Build.VERSION.SDK_INT >= 34 && entry.name in setOf("android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO", "android.permission.READ_MEDIA_VISUAL_USER_SELECTED") ->
+                    launcher.launch(arrayOf("android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO", "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"))
+                else -> launcher.launch(arrayOf(entry.name))
+            }
+        } catch (e: Exception) { feedback = "Permission request failed: " + e.message }
+    }
+    val visible = entries.filter { query.isBlank() || it.name.contains(query, true) || it.label.contains(query, true) || it.status.contains(query, true) }
+    LazyColumn(Modifier.fillMaxSize().testTag("permissions_list"), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Text("Android capabilities", style = MaterialTheme.typography.titleMedium)
+            Text(entries.size.toString() + " declared · " + entries.count { it.granted } + " granted or enabled · Android " + Build.VERSION.SDK_INT,
+                style = MaterialTheme.typography.bodySmall)
+            Text("This reads the installed manifest and Android's current grants. Special access and runtime grants are separate from declarations.", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { revision++ }) { Text("Refresh") }
+                TextButton(onClick = { openSettings("") }) { Text("App settings") }
+                TextButton(onClick = {
+                    val report = entries.joinToString("\n") { it.name + " | " + it.status }
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Codex Goal permissions", report))
+                    feedback = "Copied actual permission states."
+                }) { Text("Copy report") }
+            }
+            OutlinedButton(onClick = {
+                val names = entries.filter { it.runtime && !it.special && !it.granted && !it.restricted &&
+                    it.name !in setOf("android.permission.ACCESS_BACKGROUND_LOCATION", "android.permission.BODY_SENSORS_BACKGROUND") }.map { it.name }.toMutableList()
+                if ("android.permission.ACCESS_FINE_LOCATION" in names && "android.permission.ACCESS_COARSE_LOCATION" !in names) names.add("android.permission.ACCESS_COARSE_LOCATION")
+                if (names.isEmpty()) feedback = "No ordinary runtime grants remain. Review special access and restricted entries below."
+                else try { launcher.launch(names.toTypedArray()) } catch (e: Exception) { feedback = "Permission request failed: " + e.message }
+            }, modifier = Modifier.testTag("request_runtime_permissions")) { Text("Request runtime permissions") }
+            feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 6.dp)) }
+            OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("Filter permissions") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        items(visible, key = { it.name }) { entry ->
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(entry.label, fontWeight = FontWeight.SemiBold)
+                    Text(entry.name, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    Text(entry.status, color = if (entry.granted) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    TextButton(onClick = { request(entry) }, modifier = Modifier.testTag("permission_" + entry.name)) {
+                        Text(if (entry.special) "Android special access" else if (entry.granted || !entry.runtime || entry.restricted) "Android app settings" else "Request grant")
                     }
                 }
             }

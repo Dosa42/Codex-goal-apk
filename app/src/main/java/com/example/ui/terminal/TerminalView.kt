@@ -1,30 +1,32 @@
 package com.example.ui.terminal
 
 import android.annotation.SuppressLint
-import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
-import android.webkit.WebSettings
+import android.webkit.WebChromeClient
+import android.webkit.ConsoleMessage
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.db.OutputChunkEntity
+import org.json.JSONArray
+import org.json.JSONObject
 
 class TerminalJsBridge(
-    private val onInputCallback: (String) -> Unit,
-    private val onReadyCallback: () -> Unit
+    private val input: (String) -> Unit,
+    private val ready: () -> Unit,
+    private val error: (String) -> Unit
 ) {
-    @JavascriptInterface
-    fun onData(base64: String) {
-        onInputCallback(base64)
-    }
-
-    @JavascriptInterface
-    fun onReady() {
-        onReadyCallback()
-    }
+    private val main = Handler(Looper.getMainLooper())
+    @JavascriptInterface fun onData(base64: String) { main.post { input(base64) } }
+    @JavascriptInterface fun onReady() { main.post { ready() } }
+    @JavascriptInterface fun onError(message: String) { main.post { error(message) } }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -35,80 +37,51 @@ fun TerminalView(
     onInput: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var isTerminalReady by remember { mutableStateOf(false) }
-    var lastProcessId by remember { mutableStateOf<String?>(null) }
-    var lastWrittenSeq by remember { mutableStateOf<Long?>(-1L) }
-
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
+    val currentInput by rememberUpdatedState(onInput)
+    val context = LocalContext.current
+    key(processId) {
+        var ready by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf<String?>(null) }
+        var disposed by remember { mutableStateOf(false) }
+        val view = remember {
+            WebView(context).apply {
                 settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.cacheMode = WebSettings.LOAD_NO_CACHE
-                settings.allowFileAccess = true
-
-                addJavascriptInterface(
-                    TerminalJsBridge(
-                        onInputCallback = onInput,
-                        onReadyCallback = {
-                            isTerminalReady = true
-                        }
-                    ),
-                    "AndroidBridge"
-                )
-
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        isTerminalReady = true
+                addJavascriptInterface(TerminalJsBridge(
+                    input = { if (!disposed) currentInput(it) },
+                    ready = { if (!disposed) ready = true },
+                    error = { if (!disposed) error = it }
+                ), "AndroidBridge")
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                        if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) error = message.message()
+                        return true
                     }
                 }
-
                 loadUrl("file:///android_asset/terminal/index.html")
-                webViewRef = this
             }
-        },
-        update = { webView ->
-            webViewRef = webView
-        },
-        modifier = modifier.fillMaxSize()
-    )
-
-    // Key output rendering by processId and ordered chunks
-    LaunchedEffect(processId, chunks, isTerminalReady) {
-        val webView = webViewRef
-        if (webView != null && isTerminalReady) {
-            val sortedChunks = chunks.sortedBy { it.seq }
-
-            // If process switched, reset terminal buffer and replay
-            if (lastProcessId != processId) {
-                lastProcessId = processId
-                lastWrittenSeq = -1L
-                webView.evaluateJavascript("setProcessContext('$processId');", null)
+        }
+        DisposableEffect(view) {
+            onDispose {
+                disposed = true
+                view.removeJavascriptInterface("AndroidBridge")
+                view.stopLoading()
+                view.destroy()
             }
-
-            // Check if missing gap chunks arrived out of order (e.g. seq 2 arrived after seq 3)
-            val hasGapsRepaired = sortedChunks.any { it.seq <= (lastWrittenSeq ?: -1L) && sortedChunks.indexOf(it) > 0 }
-
-            if (lastWrittenSeq == -1L || hasGapsRepaired) {
-                // Replay complete ordered history
-                webView.evaluateJavascript("setProcessContext('$processId');", null)
-                for (chunk in sortedChunks) {
-                    val script = "writeChunkBase64('${chunk.chunkBase64}', '${chunk.stream}');"
-                    webView.evaluateJavascript(script, null)
+        }
+        LaunchedEffect(chunks, ready) {
+            if (ready && !disposed) {
+                val batch = JSONArray()
+                for (chunk in chunks.sortedBy { it.seq }) {
+                    batch.put(JSONObject().apply {
+                        put("seq", chunk.seq); put("chunkBase64", chunk.chunkBase64)
+                    })
                 }
-                lastWrittenSeq = sortedChunks.lastOrNull()?.seq ?: -1L
-            } else {
-                // Incrementally append new chunks
-                for (chunk in sortedChunks) {
-                    if (chunk.seq > (lastWrittenSeq ?: -1L)) {
-                        val script = "writeChunkBase64('${chunk.chunkBase64}', '${chunk.stream}');"
-                        webView.evaluateJavascript(script, null)
-                        lastWrittenSeq = chunk.seq
-                    }
-                }
+                view.evaluateJavascript("receiveChunks(" + JSONObject.quote(processId) + "," + batch.toString() + ");", null)
             }
+        }
+        Box(modifier.fillMaxSize()) {
+            AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
+            error?.let { Text("Terminal error: $it") }
         }
     }
 }

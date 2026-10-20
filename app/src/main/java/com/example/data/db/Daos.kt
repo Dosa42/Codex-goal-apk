@@ -58,6 +58,12 @@ interface ProcessDao {
 
     @Query("SELECT * FROM processes WHERE sessionId = :sessionId AND status IN ('STARTING', 'RUNNING', 'UNCERTAIN')")
     suspend fun getActiveProcessesForSession(sessionId: String): List<ProcessEntity>
+
+    @Query("SELECT * FROM processes WHERE sessionId = :sessionId ORDER BY createdAt ASC")
+    suspend fun getProcessesForSession(sessionId: String): List<ProcessEntity>
+
+    @Query("SELECT * FROM processes ORDER BY createdAt ASC")
+    suspend fun getAllProcesses(): List<ProcessEntity>
 }
 
 @Dao
