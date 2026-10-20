@@ -1079,7 +1079,7 @@ private fun readPermissions(context: Context): List<PermissionEntry> {
             info == null -> "Not provided by this Android build or installed apps"
             special -> if (granted) "Enabled in Android special access" else "Special access not enabled"
             granted -> "Granted"
-            restricted -> "Not granted · installer or role restricted"
+            restricted -> "Not granted · Android classifies this permission as restricted"
             base == PermissionInfo.PROTECTION_DANGEROUS -> "Runtime permission not granted"
             base == PermissionInfo.PROTECTION_SIGNATURE -> "Requires matching signer, role or system grant"
             else -> "Declared · not granted"
@@ -1135,7 +1135,7 @@ private fun PermissionsTab() {
     fun request(entry: PermissionEntry) {
         try {
             when {
-                entry.special || entry.granted || !entry.runtime || entry.restricted -> openSettings(entry.name)
+                entry.special || entry.granted || !entry.runtime -> openSettings(entry.name)
                 entry.name == "android.permission.ACCESS_BACKGROUND_LOCATION" -> {
                     if (ContextCompat.checkSelfPermission(context, "android.permission.ACCESS_COARSE_LOCATION") != PackageManager.PERMISSION_GRANTED &&
                         ContextCompat.checkSelfPermission(context, "android.permission.ACCESS_FINE_LOCATION") != PackageManager.PERMISSION_GRANTED) {
@@ -1176,7 +1176,7 @@ private fun PermissionsTab() {
                 }) { Text("Copy report") }
             }
             OutlinedButton(onClick = {
-                val names = entries.filter { it.runtime && !it.special && !it.granted && !it.restricted &&
+                val names = entries.filter { it.runtime && !it.special && !it.granted &&
                     it.name !in setOf("android.permission.ACCESS_BACKGROUND_LOCATION", "android.permission.BODY_SENSORS_BACKGROUND") }.map { it.name }.toMutableList()
                 if ("android.permission.ACCESS_FINE_LOCATION" in names && "android.permission.ACCESS_COARSE_LOCATION" !in names) names.add("android.permission.ACCESS_COARSE_LOCATION")
                 if (names.isEmpty()) feedback = "No ordinary runtime grants remain. Review special access and restricted entries below."
@@ -1192,7 +1192,7 @@ private fun PermissionsTab() {
                     Text(entry.name, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                     Text(entry.status, color = if (entry.granted) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                     TextButton(onClick = { request(entry) }, modifier = Modifier.testTag("permission_" + entry.name)) {
-                        Text(if (entry.special) "Android special access" else if (entry.granted || !entry.runtime || entry.restricted) "Android app settings" else "Request grant")
+                        Text(if (entry.special) "Android special access" else if (entry.granted || !entry.runtime) "Android app settings" else "Request grant")
                     }
                 }
             }
