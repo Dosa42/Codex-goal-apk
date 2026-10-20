@@ -39,6 +39,8 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.console.ConsoleScreen
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,7 +80,7 @@ fun MainScreen(
     val connectionError by viewModel.lastConnectionError.collectAsState()
     val actionStatus by viewModel.lastWriteStatus.collectAsState()
 
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var endpointInput by remember(endpoint) { mutableStateOf(endpoint) }
     var showEnvCard by remember { mutableStateOf(false) }
 
@@ -90,17 +92,17 @@ fun MainScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Codex Goal", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             Spacer(Modifier.width(8.dp))
-                            ConnectionBadge(connectionState)
+                            if (selectedTab > 0) ConnectionBadge(connectionState)
                         }
                         Text(
-                            text = "Exec-Server Native Client",
+                            text = if (selectedTab == 0) "Native Goal Console" else "Exec-Server Native Client",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
                 actions = {
-                    IconButton(
+                    if (selectedTab > 0) IconButton(
                         onClick = { showEnvCard = !showEnvCard },
                         modifier = Modifier.testTag("toggle_env_btn")
                     ) {
@@ -121,80 +123,82 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Connection & Endpoint Control Bar
-            ConnectionControlBar(
-                endpoint = endpointInput,
-                onEndpointChange = { endpointInput = it },
-                onSaveAndConnect = {
-                    viewModel.connect(context, endpointInput)
-                },
-                onReconnect = { viewModel.reconnect(context) },
-                onFreshSession = {
-                    viewModel.connectFreshSession(context, endpointInput)
-                },
-                onStop = { viewModel.stop(context) },
-                onCheckHealth = { viewModel.checkHealth() },
-                healthStatus = healthStatus,
-                connectionState = connectionState
-            )
+            if (selectedTab > 0) {
+                // Connection & Endpoint Control Bar
+                ConnectionControlBar(
+                    endpoint = endpointInput,
+                    onEndpointChange = { endpointInput = it },
+                    onSaveAndConnect = {
+                        viewModel.connect(context, endpointInput)
+                    },
+                    onReconnect = { viewModel.reconnect(context) },
+                    onFreshSession = {
+                        viewModel.connectFreshSession(context, endpointInput)
+                    },
+                    onStop = { viewModel.stop(context) },
+                    onCheckHealth = { viewModel.checkHealth() },
+                    healthStatus = healthStatus,
+                    connectionState = connectionState
+                )
 
-            // Session Lost Action Banner
-            connectionError?.let { Text(it, modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error) }
-            if (actionStatus?.startsWith("Error") == true) {
-                Text(actionStatus ?: "", modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
-            }
-            if (connectionState == ConnectionState.SESSION_LOST) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                // Session Lost Action Banner
+                connectionError?.let { Text(it, modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error) }
+                if (actionStatus?.startsWith("Error") == true) {
+                    Text(actionStatus ?: "", modifier = Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
+                }
+                if (connectionState == ConnectionState.SESSION_LOST) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Session Lost / Expired",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                fontSize = 13.sp
-                            )
-                            Text(
-                                "The server expired or rejected the previous session ID. Old transcripts are preserved; past commands are not replayed.",
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                fontSize = 11.sp
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = { viewModel.connectFreshSession(context) },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("New Session", fontSize = 12.sp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Session Lost / Expired",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    "The server expired or rejected the previous session ID. Old transcripts are preserved; past commands are not replayed.",
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.connectFreshSession(context) },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("New Session", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
-            }
 
-            // Collapsible Observed Environment Info
-            AnimatedVisibility(visible = showEnvCard) {
-                EnvironmentCard(env = observedEnv, onClose = { showEnvCard = false })
-            }
+                // Collapsible Observed Environment Info
+                AnimatedVisibility(visible = showEnvCard) {
+                    EnvironmentCard(env = observedEnv, onClose = { showEnvCard = false })
+                }
 
-            // Termux Launch Feedback Dialog / Banner
-            termuxMsg?.let { msg ->
-                AlertDialog(
-                    onDismissRequest = { viewModel.dismissTermuxMessage() },
-                    title = { Text("Termux Executor Launch") },
-                    text = { Text(msg) },
-                    confirmButton = {
-                        TextButton(onClick = { viewModel.dismissTermuxMessage() }) {
-                            Text("OK")
+                // Termux Launch Feedback Dialog / Banner
+                termuxMsg?.let { msg ->
+                    AlertDialog(
+                        onDismissRequest = { viewModel.dismissTermuxMessage() },
+                        title = { Text("Termux Executor Launch") },
+                        text = { Text(msg) },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.dismissTermuxMessage() }) {
+                                Text("OK")
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
 
             // Navigation Tabs
@@ -206,41 +210,48 @@ fun MainScreen(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
+                    text = { Text("Console") },
+                    icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
+                    modifier = Modifier.testTag("tab_console")
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
                     text = { Text("Processes") },
                     icon = { Icon(Icons.Default.Terminal, contentDescription = null) },
                     modifier = Modifier.testTag("tab_processes")
                 )
                 Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
                     text = { Text("Run Command") },
                     icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
                     modifier = Modifier.testTag("tab_run_command")
                 )
                 Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
                     text = { Text("Protocol Log") },
                     icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
                     modifier = Modifier.testTag("tab_protocol_log")
                 )
                 Tab(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
                     text = { Text("Diagnostics") },
                     icon = { Icon(Icons.Default.BugReport, contentDescription = null) },
                     modifier = Modifier.testTag("tab_diagnostics")
                 )
                 Tab(
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
                     text = { Text("Permissions") },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     modifier = Modifier.testTag("tab_permissions")
                 )
                 Tab(
-                    selected = selectedTab == 5,
-                    onClick = { selectedTab = 5 },
+                    selected = selectedTab == 6,
+                    onClick = { selectedTab = 6 },
                     text = { Text("Workspace") },
                     icon = { Icon(Icons.Default.Folder, contentDescription = null) },
                     modifier = Modifier.testTag("tab_workspace")
@@ -250,12 +261,13 @@ fun MainScreen(
             // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedTab) {
-                    0 -> ProcessesTab(viewModel)
-                    1 -> RunCommandTab(viewModel)
-                    2 -> ProtocolLogTab(viewModel)
-                    3 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
-                    4 -> PermissionsTab()
-                    5 -> WorkspaceTab(viewModel)
+                    0 -> ConsoleScreen()
+                    1 -> ProcessesTab(viewModel)
+                    2 -> RunCommandTab(viewModel)
+                    3 -> ProtocolLogTab(viewModel)
+                    4 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
+                    5 -> PermissionsTab()
+                    6 -> WorkspaceTab(viewModel)
                 }
             }
         }
