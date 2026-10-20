@@ -5,11 +5,12 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.AtomicFile
+import java.io.Closeable
 import java.io.File
 import java.util.UUID
 
 /** Endpoint, event history and cursor are separate from all executor preferences. */
-class ConsoleStorage(context: Context) : SQLiteOpenHelper(context, "goal-console.db", null, 3) {
+class ConsoleStorage(context: Context) : SQLiteOpenHelper(context, "goal-console.db", null, 3), Closeable {
     private val prefs = context.getSharedPreferences("goal-console", Context.MODE_PRIVATE)
     private val snapshotFile = AtomicFile(File(context.filesDir, "goal-console-last-snapshot.json"))
     var endpoint: String
