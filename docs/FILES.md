@@ -24,3 +24,7 @@ The app checks for destination collisions and changed file contents before savin
 The APK's Voice view loads the existing voice room at `http://127.0.0.1:8790/`. That service owns the shared three-account Groq TTS pool and its account picker; the APK does not maintain a second pool. The three stored credentials are distinct. A fresh Node request verified the third account's model-list authentication with HTTP200; that alone does not verify TTS terms, speech generation, or current speech quota.
 
 The selected account remains **Original Groq**. Account switching is explicit; automatic retries and failover remain off. STT still uses the original bootstrap key. Opening Files, Console, or Voice does not automatically start the microphone. Installation and execution evidence for this update is recorded in the versioned delivery report under `Download/Codex-Documents/01-Goal-Console`.
+
+## Executor reconnection
+
+Reconnect retries the saved executor-session ID, including a row previously marked lost. Temporary already-attached/busy replies keep that ID and use the existing reconnect backoff. An actual unknown or expired session stays visibly unavailable. Only **New Session** creates a replacement executor session; previous process records are retained and are not replayed or migrated. This executor session is separate from the persistent CEO Codex goal.

@@ -83,6 +83,10 @@ class ExecRepository(private val db: AppDatabase) {
         db.sessionDao().updateStatus(sessionId, "SESSION_LOST", System.currentTimeMillis())
     }
 
+    suspend fun markSessionResumable(sessionId: String) {
+        db.sessionDao().updateStatus(sessionId, "RESUMABLE", System.currentTimeMillis())
+    }
+
     // Processes
     suspend fun createProcess(
         processId: String,

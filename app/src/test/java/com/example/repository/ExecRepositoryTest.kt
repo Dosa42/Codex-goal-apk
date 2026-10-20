@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.db.AppDatabase
+import com.example.data.model.EnvironmentInfo
 import com.example.data.model.InitializeResult
 import com.example.data.model.OutputChunkDto
 import com.example.data.model.ProcessStatus
@@ -37,6 +38,22 @@ class ExecRepositoryTest {
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun testBusySessionBecomesResumableWithoutReplacingItsIdentityOrEnvironment() = runBlocking {
+        val endpoint = "ws://127.0.0.1:33995"
+        repository.saveSession(InitializeResult("original-session",
+            EnvironmentInfo(cwd = "file:///executor/original", platformOs = "android")), endpoint)
+        val before = repository.getLatestSessionForEndpoint(endpoint)!!
+        repository.markSessionLost(before.sessionId)
+        repository.markSessionResumable(before.sessionId)
+        val after = repository.getLatestSessionForEndpoint(endpoint)!!
+        assertEquals("RESUMABLE", after.status)
+        assertEquals(before.sessionId, after.sessionId)
+        assertEquals(before.endpoint, after.endpoint)
+        assertEquals(before.createdAt, after.createdAt)
+        assertEquals(before.environmentInfoJson, after.environmentInfoJson)
     }
 
     @Test

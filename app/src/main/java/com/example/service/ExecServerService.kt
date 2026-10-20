@@ -101,7 +101,7 @@ class ExecServerService : Service() {
                     ConnectionState.CONNECTING -> "Connecting to loopback..."
                     ConnectionState.INITIALIZING -> "Handshaking with exec-server..."
                     ConnectionState.INITIALIZED -> "Connected (Session: ${client.currentSessionId.value?.take(8)}...)"
-                    ConnectionState.SESSION_LOST -> "Session lost; fresh session needed"
+                    ConnectionState.SESSION_LOST -> "Saved session unavailable; Reconnect retries it"
                     ConnectionState.ERROR -> "Error: ${client.lastError.value ?: "Connection failed"}"
                 }
                 updateNotification(text)
@@ -136,7 +136,7 @@ class ExecServerService : Service() {
                 }
                 ACTION_RECONNECT -> {
                     repository.setConnectionDesired(true)
-                    client.start(endpoint, isReconnect = true)
+                    client.start(endpoint, isReconnect = true, retryLostSession = true)
                 }
                 ACTION_FRESH_SESSION -> {
                     repository.setConnectionDesired(true)

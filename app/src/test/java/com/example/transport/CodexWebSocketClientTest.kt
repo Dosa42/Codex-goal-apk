@@ -248,6 +248,99 @@ class CodexWebSocketClientTest {
     }
 
     @Test
+    fun testAttachedSessionBacksOffThenResumesSameIdWithoutMarkingItLost() = runBlocking {
+        client.stop()
+        client = CodexWebSocketClient(repository, scope, retryBaseMs = 20)
+        val endpoint = server.url("/").toString().replace("http://", "ws://")
+        repository.saveSession(InitializeResult("original-busy-session"), endpoint)
+        val first = LinkedBlockingQueue<JSONObject>()
+        val retry = LinkedBlockingQueue<Pair<WebSocket, JSONObject>>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (message.optString("method") != "initialize") return
+                first.add(message)
+                webSocket.send(JSONObject().put("id", message.getLong("id"))
+                    .put("error", JSONObject().put("code", -32010)
+                        .put("message", "session original-busy-session is already attached to another connection")).toString())
+            }
+        }))
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (message.optString("method") == "initialize") retry.add(webSocket to message)
+            }
+        }))
+
+        client.start(endpoint)
+        assertEquals("original-busy-session", first.poll(5, TimeUnit.SECONDS)!!.getJSONObject("params").getString("resumeSessionId"))
+        val (socket, request) = requireNotNull(retry.poll(5, TimeUnit.SECONDS))
+        assertEquals("original-busy-session", request.getJSONObject("params").getString("resumeSessionId"))
+        assertEquals("RESUMABLE", repository.getLatestSessionForEndpoint(endpoint)?.status)
+        assertEquals(2, server.requestCount)
+        socket.send(JSONObject().put("id", request.getLong("id"))
+            .put("result", JSONObject().put("sessionId", "original-busy-session")).toString())
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        assertEquals("original-busy-session", client.currentSessionId.value)
+        assertEquals("ACTIVE", repository.getLatestSessionForEndpoint(endpoint)?.status)
+        assertEquals(0, client.pendingRpcCount)
+    }
+
+    @Test
+    fun testExplicitReconnectRetriesLostSavedIdWhileStickyStartKeepsTheGuard() = runBlocking {
+        val endpoint = server.url("/").toString().replace("http://", "ws://")
+        repository.saveSession(InitializeResult("previously-misclassified"), endpoint)
+        repository.markSessionLost("previously-misclassified")
+        val requests = LinkedBlockingQueue<JSONObject>()
+        val listener = object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (message.optString("method") != "initialize") return
+                requests.add(message)
+                webSocket.send(JSONObject().put("id", message.getLong("id"))
+                    .put("result", JSONObject().put("sessionId", "previously-misclassified")).toString())
+            }
+        }
+        repeat(2) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+
+        // Sticky recovery uses isReconnect without the explicit retryLostSession option.
+        client.start(endpoint, isReconnect = true)
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.SESSION_LOST) delay(10) }
+        assertNull(requests.poll(100, TimeUnit.MILLISECONDS))
+        assertEquals("SESSION_LOST", repository.getLatestSessionForEndpoint(endpoint)?.status)
+
+        client.start(endpoint, isReconnect = true, retryLostSession = true)
+        assertEquals("previously-misclassified", requests.poll(5, TimeUnit.SECONDS)!!.getJSONObject("params").getString("resumeSessionId"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        assertEquals("previously-misclassified", client.currentSessionId.value)
+        assertEquals("ACTIVE", repository.getLatestSessionForEndpoint(endpoint)?.status)
+        assertNull(requests.poll(100, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun testOtherInitializeRejectionDoesNotDeclareSavedSessionLost() = runBlocking {
+        val endpoint = server.url("/").toString().replace("http://", "ws://")
+        repository.saveSession(InitializeResult("retained-session"), endpoint)
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (message.optString("method") != "initialize") return
+                webSocket.send(JSONObject().put("id", message.getLong("id"))
+                    .put("error", JSONObject().put("code", -32602)
+                        .put("message", "session initialization failed: unknown executor option")).toString())
+            }
+        }))
+        client.start(endpoint)
+        withTimeout(5000) {
+            while (client.connectionState.value != ConnectionState.ERROR || client.lastError.value == null || client.pendingRpcCount != 0) delay(10)
+        }
+        assertEquals("ACTIVE", repository.getLatestSessionForEndpoint(endpoint)?.status)
+        assertTrue(client.lastError.value!!.contains("-32602"))
+        assertFalse(client.lastError.value!!.contains("expired"))
+        assertEquals(0, client.pendingRpcCount)
+    }
+
+    @Test
     fun testUnknownSessionRpcErrorTransitionsToSessionLost() = runBlocking {
         // Pre-populate old session
         repository.saveSession(InitializeResult("unknown-expired-session-999"), server.url("/").toString().replace("http://", "ws://"))
@@ -262,7 +355,7 @@ class CodexWebSocketClientTest {
                         put("id", id)
                         put("error", JSONObject().apply {
                             put("code", -32600)
-                            put("message", "Session unknown or expired on executor")
+                            put("message", "unknown session id unknown-expired-session-999")
                         })
                     }
                     webSocket.send(resp.toString())

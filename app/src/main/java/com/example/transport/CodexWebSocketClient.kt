@@ -67,15 +67,15 @@ class CodexWebSocketClient(
     private var isUserStopped = false
     private var reconnectAttempt = 0
     private var forceFreshSession = false
+    private var retryLostSession = false
 
     var currentEndpoint: String? = null
         private set
 
-    fun start(endpoint: String, isReconnect: Boolean = false, freshSession: Boolean = false) {
+    fun start(endpoint: String, isReconnect: Boolean = false, freshSession: Boolean = false, retryLostSession: Boolean = false) {
         isUserStopped = false
-        if (freshSession) {
-            forceFreshSession = true
-        }
+        forceFreshSession = freshSession
+        this.retryLostSession = retryLostSession && !freshSession
         reconnectJob?.cancel()
 
         // Turnover: Invalidate generation -> cancel/close old socket -> fail old pending -> new socket
@@ -86,6 +86,7 @@ class CodexWebSocketClient(
     fun stop() {
         isUserStopped = true
         forceFreshSession = false
+        retryLostSession = false
         reconnectJob?.cancel()
         reconnectAttempt = 0
         closeCurrentSocket("User requested stop")
@@ -142,7 +143,6 @@ class CodexWebSocketClient(
                 }
                 scope.launch {
                     if (currentGeneration.get() != generation) return@launch
-                    reconnectAttempt = 0
                     _connectionState.value = ConnectionState.INITIALIZING
                     repository.recordEvent("IN", "OPEN", "WebSocket transport opened", response.message)
                     performHandshake(endpoint, generation, webSocket)
@@ -226,17 +226,17 @@ class CodexWebSocketClient(
 
         val lastSession = repository.getLatestSessionForEndpoint(endpoint)
         if (currentGeneration.get() != generation) return
-        if (!forceFreshSession && lastSession?.endpoint == endpoint && lastSession.status == "SESSION_LOST") {
+        if (!forceFreshSession && !retryLostSession && lastSession?.endpoint == endpoint && lastSession.status == "SESSION_LOST") {
             _connectionState.value = ConnectionState.SESSION_LOST
-            _lastError.value = "Previous session is lost. Choose New Session to continue."
-            closeCurrentSocket("Explicit new session required")
+            _lastError.value = "Saved session is unavailable. Reconnect retries the same session; New Session explicitly creates another."
+            closeCurrentSocket("Explicit saved-session retry required")
             return
         }
-        // Resume scope: same endpoint AND non-lost session
+        // Explicit Reconnect may retry a previously misclassified lost row; never omit its ID.
         val shouldAttemptResume = !forceFreshSession &&
                 lastSession != null &&
                 lastSession.endpoint == endpoint &&
-                lastSession.status != "SESSION_LOST"
+                (lastSession.status != "SESSION_LOST" || retryLostSession)
 
         val resumeSessionId = if (shouldAttemptResume) lastSession?.sessionId else null
 
@@ -253,18 +253,33 @@ class CodexWebSocketClient(
             if (response.has("error")) {
                 val errorObj = response.getJSONObject("error")
                 val errMsg = errorObj.optString("message", "Unknown initialize error")
+                val detail = "Initialize error ${errorObj.opt("code")}: $errMsg"
+                val reason = errMsg.lowercase()
+                val attachedOrBusy = reason.contains("already attached") ||
+                        (reason.contains("session") && reason.contains("busy"))
+                val missingSession = !attachedOrBusy && Regex(
+                    """\b(?:unknown|expired) session\b|\bno such session\b|\bsession(?:\s+[a-z0-9-]+)?\s+(?:(?:is|has)\s+)?(?:unknown|expired|not found|does not exist)\b"""
+                ).containsMatchIn(reason)
                 Log.w(TAG, "Initialize RPC returned error: $errMsg")
 
-                if (resumeSessionId != null) {
-                    // Unknown or expired session: halt resume loop and persist SESSION_LOST
+                if (resumeSessionId != null && missingSession) {
+                    retryLostSession = false
                     repository.markSessionLost(resumeSessionId)
+                    if (currentGeneration.get() != generation) return
                     _connectionState.value = ConnectionState.SESSION_LOST
-                    _lastError.value = "Session $resumeSessionId expired or unknown: $errMsg"
+                    _lastError.value = "Session $resumeSessionId is unavailable: $detail. Reconnect retries this ID."
                     closeCurrentSocket("Session unknown/expired")
+                    return
+                } else if (resumeSessionId != null && attachedOrBusy) {
+                    repository.markSessionResumable(resumeSessionId)
+                    if (currentGeneration.get() != generation) return
+                    retryLostSession = false
+                    // Cancels this socket before backoff; the next handshake retains the saved ID.
+                    handleDisconnect(endpoint, "Session $resumeSessionId temporarily unavailable: $detail", generation)
                     return
                 } else {
                     _connectionState.value = ConnectionState.ERROR
-                    _lastError.value = errMsg
+                    _lastError.value = detail
                     closeCurrentSocket(errMsg)
                     return
                 }
@@ -299,6 +314,7 @@ class CodexWebSocketClient(
             if (currentGeneration.get() != generation) return
             _currentSessionId.value = newSessionId
             forceFreshSession = false
+            retryLostSession = false
 
             // Send 'initialized' notification with empty params object {}
             val notifSent = sendNotificationInternal("initialized", JSONObject(), ws, generation)
@@ -310,6 +326,7 @@ class CodexWebSocketClient(
             }
 
             if (currentGeneration.get() != generation) return
+            reconnectAttempt = 0
             _connectionState.value = ConnectionState.INITIALIZED
 
             // Reconcile active processes scoped to this session
