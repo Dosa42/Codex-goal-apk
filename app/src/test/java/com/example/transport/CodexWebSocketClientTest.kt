@@ -59,6 +59,58 @@ class CodexWebSocketClientTest {
     }
 
     @Test
+    fun testReturningToEndpointResumesItsSessionWhenOtherEndpointIsGloballyLatest() = runBlocking {
+        val native = server.url("/native").toString().replace("http://", "ws://")
+        val remote = server.url("/v1/exec-server?XTransformPort=8260").toString().replace("http://", "ws://")
+        repository.saveSession(InitializeResult("native-original"), native)
+        delay(5)
+        repository.saveSession(InitializeResult("remote-newer"), remote)
+        val initialize = LinkedBlockingQueue<JSONObject>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (message.optString("method") == "initialize") {
+                    initialize.add(message)
+                    webSocket.send(JSONObject().put("id", message.getLong("id"))
+                        .put("result", JSONObject().put("sessionId", "native-original")).toString())
+                }
+            }
+        }))
+        client.start(native)
+        assertEquals("native-original", initialize.poll(5, TimeUnit.SECONDS)!!.getJSONObject("params").getString("resumeSessionId"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        assertEquals("native-original", client.currentSessionId.value)
+        assertEquals(native, client.currentEndpoint)
+        assertEquals("remote-newer", repository.getLatestSessionForEndpoint(remote)?.sessionId)
+    }
+
+    @Test
+    fun testInheritedEnvironmentIsSentAsExplicitEmptyObject() = runBlocking {
+        val starts = LinkedBlockingQueue<JSONObject>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                if (!message.has("id")) return
+                val result = when (message.optString("method")) {
+                    "initialize" -> JSONObject().put("sessionId", "environment-wire-session")
+                    "process/start" -> {
+                        starts.add(message)
+                        JSONObject().put("processId", message.getJSONObject("params").getString("processId"))
+                    }
+                    else -> JSONObject()
+                }
+                webSocket.send(JSONObject().put("id", message.getLong("id")).put("result", result).toString())
+            }
+        }))
+        client.start(server.url("/").toString().replace("http://", "ws://"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        assertTrue(client.startProcess(listOf("/bin/sh", "-c", "exit 0"), tty = false).isSuccess)
+        val params = starts.poll(5, TimeUnit.SECONDS)!!.getJSONObject("params")
+        assertEquals(0, params.getJSONObject("env").length())
+        assertEquals("/bin/sh", params.getJSONArray("argv").getString(0))
+    }
+
+    @Test
     fun testRealWebSocketHandshakeThenInitializedWithEmptyParams() = runBlocking {
         val serverReceivedMessages = LinkedBlockingQueue<String>()
 

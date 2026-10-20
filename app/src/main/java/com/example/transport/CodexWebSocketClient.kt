@@ -68,6 +68,9 @@ class CodexWebSocketClient(
     private var reconnectAttempt = 0
     private var forceFreshSession = false
 
+    var currentEndpoint: String? = null
+        private set
+
     fun start(endpoint: String, isReconnect: Boolean = false, freshSession: Boolean = false) {
         isUserStopped = false
         if (freshSession) {
@@ -113,6 +116,7 @@ class CodexWebSocketClient(
     }
 
     private fun connectInternal(endpoint: String) {
+        currentEndpoint = endpoint
         val generation = currentGeneration.incrementAndGet()
         _connectionState.value = ConnectionState.CONNECTING
         _lastError.value = null
@@ -220,7 +224,7 @@ class CodexWebSocketClient(
     private suspend fun performHandshake(endpoint: String, generation: Long, ws: WebSocket) {
         if (currentGeneration.get() != generation) return
 
-        val lastSession = repository.getLatestSession()
+        val lastSession = repository.getLatestSessionForEndpoint(endpoint)
         if (currentGeneration.get() != generation) return
         if (!forceFreshSession && lastSession?.endpoint == endpoint && lastSession.status == "SESSION_LOST") {
             _connectionState.value = ConnectionState.SESSION_LOST
@@ -443,6 +447,8 @@ class CodexWebSocketClient(
         val ws = webSocket ?: return Result.failure(IOException("WebSocket is not connected"))
 
 
+        // Native exec-server requires an object even when inheriting its environment.
+        val effectiveEnv = env ?: emptyMap()
         // 1. Transactionally record the process as STARTING in repository
         repository.createProcess(
             processId = processId,
@@ -450,7 +456,7 @@ class CodexWebSocketClient(
             title = title,
             argv = argv,
             cwd = cwd,
-            env = env,
+            env = effectiveEnv,
             tty = tty
         )
 
@@ -458,7 +464,7 @@ class CodexWebSocketClient(
             processId = processId,
             argv = argv,
             cwd = cwd,
-            env = env,
+            env = effectiveEnv,
             tty = tty,
             pipeStdin = false,
             arg0 = null

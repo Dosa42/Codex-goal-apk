@@ -40,6 +40,19 @@ class ExecRepositoryTest {
     }
 
     @Test
+    fun testEndpointSessionsRemainSeparatelyResumable() = runBlocking {
+        val native = "ws://127.0.0.1:33995"
+        val remote = "wss://preview.example/v1/exec-server?XTransformPort=8260"
+        repository.saveSession(InitializeResult("native-preserved"), native)
+        kotlinx.coroutines.delay(5)
+        repository.saveSession(InitializeResult("remote-latest"), remote)
+        assertEquals("remote-latest", repository.getLatestSession()?.sessionId)
+        assertEquals("native-preserved", repository.getLatestSessionForEndpoint(native)?.sessionId)
+        assertEquals("remote-latest", repository.getLatestSessionForEndpoint(remote)?.sessionId)
+        assertNull(repository.getLatestSessionForEndpoint("wss://another.example/v1/exec-server"))
+    }
+
+    @Test
     fun testContiguousCursorGapAndDuplicateScenarios() = runBlocking {
         val processId = "proc-contiguous-1"
         repository.createProcess(

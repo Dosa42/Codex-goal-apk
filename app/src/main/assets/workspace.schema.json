@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-goal:workspace:1",
+  "title": "Codex Goal executor workspace setting",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "workspaceUri"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 1
+    },
+    "workspaceUri": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^file:///"
+    }
+  },
+  "additionalProperties": false
+}

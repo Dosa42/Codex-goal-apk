@@ -130,6 +130,7 @@ class ExecServerService : Service() {
 
             when (action) {
                 ACTION_START -> {
+                    endpointExtra?.let { repository.setEndpoint(it) }
                     repository.setConnectionDesired(true)
                     client.start(endpoint)
                 }

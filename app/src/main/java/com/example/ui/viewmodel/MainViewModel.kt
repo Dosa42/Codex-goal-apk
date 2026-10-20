@@ -10,6 +10,7 @@ import com.example.data.db.ProcessEntity
 import com.example.data.db.ProtocolEventEntity
 import com.example.data.model.ConnectionState
 import com.example.data.model.EnvironmentInfo
+import com.example.data.model.ExecutorEnvironment
 import com.example.data.model.ProcessStatus
 import com.example.data.repository.ExecRepository
 import com.example.service.ExecServerService
@@ -36,8 +37,8 @@ enum class StepStatus { PENDING, RUNNING, PASSED, FAILED }
 data class WorkspaceEntry(val name: String, val uri: String, val directory: Boolean, val file: Boolean)
 
 data class WorkspaceState(
-    val workingUri: String = "file:///data/data/com.termux/files/home/.codex",
-    val directoryUri: String = "file:///data/data/com.termux/files/home/.codex",
+    val workingUri: String = "",
+    val directoryUri: String = "",
     val configUri: String = "",
     val entries: List<WorkspaceEntry> = emptyList(),
     val fileUri: String? = null,
@@ -47,7 +48,8 @@ data class WorkspaceState(
     val dirty: Boolean = false,
     val busy: Boolean = false,
     val loaded: Boolean = false,
-    val status: String = "Connect to load the Termux workspace",
+    val sessionId: String? = null,
+    val status: String = "Connect to load the executor workspace",
     val error: String? = null
 )
 
@@ -85,21 +87,11 @@ class MainViewModel(
         return fileSystemRequest(method, params, operationGeneration)
     }
 
-    private fun childUri(parent: String, name: String): String =
-        android.net.Uri.parse(parent.trimEnd('/')).buildUpon().appendPath(name).build().toString()
+    private fun childUri(parent: String, name: String): String = ExecutorEnvironment.childUri(parent, name)
 
     fun workspacePath(uri: String): String = android.net.Uri.parse(uri).path ?: uri
 
-    private fun pathUri(value: String): String {
-        val input = value.trim()
-        require(input.startsWith('/') || input.startsWith("file://")) { "Enter an absolute executor path or file URI" }
-        val uri = if (input.startsWith("file://")) android.net.Uri.parse(input)
-            else android.net.Uri.fromFile(java.io.File(input))
-        require(uri.scheme == "file" && uri.host.isNullOrEmpty() && uri.path?.startsWith('/') == true) {
-            "Enter an absolute executor path or file URI"
-        }
-        return uri.toString()
-    }
+    private fun pathUri(value: String): String = ExecutorEnvironment.fileUri(value.trim())
 
     private fun workspaceAction(action: suspend () -> Unit) {
         viewModelScope.launch {
@@ -110,7 +102,7 @@ class MainViewModel(
                     operationGeneration = operationClient!!.socketGeneration
                     action()
                 }
-                catch (e: TimeoutCancellationException) { _workspace.update { it.copy(error = "Filesystem request timed out. A write may have reached Termux; reload to inspect its result.") } }
+                catch (e: TimeoutCancellationException) { _workspace.update { it.copy(error = "Filesystem request timed out. A write may have reached the executor; reload to inspect its result.") } }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { _workspace.update { it.copy(error = e.message ?: e.javaClass.name) } }
                 finally {
@@ -150,23 +142,23 @@ class MainViewModel(
     fun loadWorkspace() = workspaceAction {
         val client = workspaceClient()
         val generation = client.socketGeneration
-        val home = client.observedEnvironment.value?.userHomeDir ?: throw IOException("Executor did not report its home")
-        val codex = childUri(home, ".codex")
-        val settingsDir = childUri(codex, "android-client")
-        val configUri = childUri(settingsDir, "workspace.json")
-        var working = codex
+        val executor = ExecutorEnvironment.from(client.observedEnvironment.value)
+        val settingsDir = executor.configDirectoryUri
+        val configUri = executor.configUri
+        check(!_workspace.value.dirty || _workspace.value.fileSessionId == client.currentSessionId.value) {
+            "Pending edits belong to another executor session; copy or close that file before loading this workspace"
+        }
+        var working = executor.defaultWorkingUri
         var status = "Default working folder; no workspace setting saved yet"
         var foundConfig = false
-        client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", codex).put("recursive", true))
-        if (listWorkspace(client, codex).any { it.name == "android-client" && it.directory }) {
-            if (listWorkspace(client, settingsDir).any { it.name == "workspace.json" && it.file }) {
-                val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri))
-                val config = org.json.JSONObject(String(Base64.decode(response.getString("dataBase64"), Base64.NO_WRAP), Charsets.UTF_8))
-                check(config.getInt("formatVersion") == 1) { "Unsupported workspace setting format" }
-                working = pathUri(config.getString("workspaceUri"))
-                status = "Working folder loaded from Termux"
-                foundConfig = true
-            }
+        client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", settingsDir).put("recursive", true))
+        if (listWorkspace(client, settingsDir).any { it.name == "workspace.json" && it.file }) {
+            val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri))
+            val config = org.json.JSONObject(String(Base64.decode(response.getString("dataBase64"), Base64.NO_WRAP), Charsets.UTF_8))
+            check(config.getInt("formatVersion") == 1) { "Unsupported workspace setting format" }
+            working = pathUri(config.getString("workspaceUri"))
+            status = "Working folder loaded from executor (${executor.platformOs})"
+            foundConfig = true
         }
         val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", working)).getString("path")
         val entries = listWorkspace(client, canonical)
@@ -178,10 +170,10 @@ class MainViewModel(
             check(client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri)).getString("dataBase64") == encoded) {
                 "Default workspace setting readback differs; reload"
             }
-            status = "Default workspace setting created and read back in Termux"
+            status = "Default workspace setting created and read back on executor (${executor.platformOs})"
         }
         check(client.socketGeneration == generation) { "Connection changed while loading workspace; reload" }
-        _workspace.update { it.copy(workingUri = canonical, directoryUri = canonical, configUri = configUri,
+        _workspace.update { it.copy(workingUri = canonical, directoryUri = canonical, configUri = configUri, sessionId = client.currentSessionId.value,
             entries = entries, loaded = true, status = status) }
     }
 
@@ -191,7 +183,7 @@ class MainViewModel(
         val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", pathUri(path))).getString("path")
         val entries = listWorkspace(client, canonical)
         _workspace.update { it.copy(directoryUri = canonical, entries = entries, fileUri = null, fileSessionId = null,
-            text = "", originalBase64 = null, dirty = false, status = "Folder read from Termux") }
+            text = "", originalBase64 = null, dirty = false, status = "Folder read from executor") }
     }
 
     fun workspaceUp() {
@@ -210,7 +202,7 @@ class MainViewModel(
         client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", state.configUri).put("dataBase64", encoded))
         val readback = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", state.configUri)).getString("dataBase64")
         check(readback == encoded) { "Workspace setting readback differs; reload before retrying" }
-        _workspace.update { it.copy(workingUri = state.directoryUri, status = "Working folder saved and read back in Termux") }
+        _workspace.update { it.copy(workingUri = state.directoryUri, status = "Working folder saved and read back on executor") }
     }
 
     fun openWorkspaceFile(uri: String) = workspaceAction {
@@ -220,7 +212,7 @@ class MainViewModel(
         val bytes = Base64.decode(encoded, Base64.NO_WRAP)
         val text = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString()
         _workspace.update { it.copy(fileUri = uri, fileSessionId = client.currentSessionId.value,
-            text = text, originalBase64 = encoded, dirty = false, status = "UTF-8 file read from Termux") }
+            text = text, originalBase64 = encoded, dirty = false, status = "UTF-8 file read from executor") }
     }
 
     fun editWorkspaceText(text: String) { _workspace.update { it.copy(text = text, dirty = true) } }
@@ -237,7 +229,7 @@ class MainViewModel(
         if (directory) client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", uri).put("recursive", false))
         else client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", uri).put("dataBase64", ""))
         val entries = listWorkspace(client, state.directoryUri)
-        _workspace.update { it.copy(entries = entries, status = "Created in Termux: $name") }
+        _workspace.update { it.copy(entries = entries, status = "Created on executor: $name") }
     }
 
     fun saveWorkspaceFile() = workspaceAction {
@@ -248,12 +240,12 @@ class MainViewModel(
             "Executor session changed since opening this file; copy pending edits and reload the file before saving"
         }
         val current = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri))).getString("dataBase64")
-        check(current == state.originalBase64) { "File changed in Termux since opening; reload before saving" }
+        check(current == state.originalBase64) { "File changed on executor since opening; reload before saving" }
         val encoded = Base64.encodeToString(state.text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", pathUri(uri)).put("dataBase64", encoded))
         val readback = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri))).getString("dataBase64")
         check(readback == encoded) { "File readback differs; inspect the file before retrying" }
-        _workspace.update { it.copy(originalBase64 = encoded, dirty = false, status = "Saved and read back from Termux") }
+        _workspace.update { it.copy(originalBase64 = encoded, dirty = false, status = "Saved and read back on executor") }
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -356,20 +348,15 @@ class MainViewModel(
     fun checkHealth() {
         viewModelScope.launch(Dispatchers.IO) {
             _healthStatus.value = "Checking..."
-            val ep = repository.getEndpoint()
-            // Derive http url from ws url
-            val httpUrl = ep.replace("ws://", "http://").replace("wss://", "https://")
-                .trimEnd('/') + "/readyz"
+            val client = ExecServerService.activeClient
+            val ep = client?.currentEndpoint ?: repository.getEndpoint()
 
             try {
-                val req = Request.Builder().url(httpUrl).build()
-                val resp = httpClient.newCall(req).execute()
-                val code = resp.code
-                val body = resp.body?.string()?.trim() ?: ""
-                _healthStatus.value = if (resp.isSuccessful) {
-                    "HTTP $code OK ($body)"
-                } else {
-                    "HTTP $code ($body)"
+                val req = Request.Builder().url(ExecutorEnvironment.healthUrl(ep)).build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val code = resp.code
+                    val body = resp.body?.string()?.trim() ?: ""
+                    _healthStatus.value = if (resp.isSuccessful) "HTTP $code OK ($body)" else "HTTP $code ($body)"
                 }
             } catch (e: Exception) {
                 _healthStatus.value = "Unreachable: ${e.message}"
@@ -383,20 +370,16 @@ class MainViewModel(
             if (client == null || client.connectionState.value != ConnectionState.INITIALIZED) {
                 return@launch
             }
-            val defaultCwd = cwd ?: _workspace.value.takeIf { it.loaded }?.workingUri
-                ?: run { _lastWriteStatus.value = "Error: Load the Termux workspace first"; return@launch }
-            val env = mapOf(
-                "HOME" to "/data/data/com.termux/files/home",
-                "PREFIX" to "/data/data/com.termux/files/usr",
-                "PATH" to "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin",
-                "TERM" to "xterm-256color"
-            )
+            val executor = try { ExecutorEnvironment.from(client.observedEnvironment.value) }
+                catch (e: Exception) { _lastWriteStatus.value = "Error: ${e.message}"; return@launch }
+            val defaultCwd = cwd?.takeIf { it.isNotBlank() } ?: _workspace.value.takeIf { it.loaded && it.sessionId == client.currentSessionId.value }?.workingUri
+                ?: run { _lastWriteStatus.value = "Error: Load the connected executor workspace first"; return@launch }
             val result = client.startProcess(
-                argv = listOf("/data/data/com.termux/files/usr/bin/bash", "-l"),
+                argv = executor.interactiveArgv(),
                 cwd = defaultCwd,
-                env = env,
+                env = executor.environment(tty = true),
                 tty = true,
-                title = "Interactive Bash Shell"
+                title = "Interactive ${executor.shellName} (${executor.platformOs})"
             )
             result.onSuccess { params ->
                 _selectedProcessId.value = params.processId
@@ -410,19 +393,16 @@ class MainViewModel(
             if (client == null || client.connectionState.value != ConnectionState.INITIALIZED) {
                 return@launch
             }
-            val defaultCwd = cwd ?: _workspace.value.takeIf { it.loaded }?.workingUri
-                ?: run { _lastWriteStatus.value = "Error: Load the Termux workspace first"; return@launch }
-            val env = mapOf(
-                "HOME" to "/data/data/com.termux/files/home",
-                "PREFIX" to "/data/data/com.termux/files/usr",
-                "PATH" to "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
-            )
+            val executor = try { ExecutorEnvironment.from(client.observedEnvironment.value) }
+                catch (e: Exception) { _lastWriteStatus.value = "Error: ${e.message}"; return@launch }
+            val defaultCwd = cwd?.takeIf { it.isNotBlank() } ?: _workspace.value.takeIf { it.loaded && it.sessionId == client.currentSessionId.value }?.workingUri
+                ?: run { _lastWriteStatus.value = "Error: Load the connected executor workspace first"; return@launch }
             val result = client.startProcess(
-                argv = listOf("/system/bin/sh", "-c", command),
+                argv = executor.commandArgv(command),
                 cwd = defaultCwd,
-                env = env,
+                env = executor.environment(tty = false),
                 tty = false,
-                title = "sh -c: $command"
+                title = "${executor.shellName} -c: $command"
             )
             result.onSuccess { params ->
                 _selectedProcessId.value = params.processId
@@ -496,9 +476,9 @@ class MainViewModel(
             val cleanupErrors = mutableListOf<String>()
             val startedAt = System.currentTimeMillis()
             val steps = mutableListOf(
-                AcceptanceCheckStep("1. Health Endpoint", "GET /readyz", StepStatus.PENDING),
+                AcceptanceCheckStep("1. Health Endpoint", "GET connected executor health endpoint", StepStatus.PENDING),
                 AcceptanceCheckStep("2. Initialize Handshake", "Observed initialized session", StepStatus.PENDING),
-                AcceptanceCheckStep("3. One-Shot Command", "Distinct stdout/stderr and Termux UID", StepStatus.PENDING),
+                AcceptanceCheckStep("3. One-Shot Command", "Distinct stdout/stderr and executor UID", StepStatus.PENDING),
                 AcceptanceCheckStep("4. Exit Code Handling", "Observed exit 42", StepStatus.PENDING),
                 AcceptanceCheckStep("5. Interactive PTY Roundtrip", "Write input and verify reply + exit 7", StepStatus.PENDING)
             )
@@ -507,13 +487,6 @@ class MainViewModel(
                 _acceptanceSteps.value = steps.toList()
             }
             val client = ExecServerService.activeClient
-            val cwd = "file:///data/data/com.termux/files/home"
-            val env = mapOf(
-                "HOME" to "/data/data/com.termux/files/home",
-                "PREFIX" to "/data/data/com.termux/files/usr",
-                "PATH" to "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin",
-                "TERM" to "xterm-256color"
-            )
             suspend fun output(id: String, stream: String): String {
                 val bytes = java.io.ByteArrayOutputStream()
                 repository.getChunks(id).filter { it.stream == stream }.sortedBy { it.seq }.forEach {
@@ -534,31 +507,35 @@ class MainViewModel(
             }
             try {
                 withTimeout(30000) {
+                    check(client != null && client.connectionState.value == ConnectionState.INITIALIZED) { "Transport not initialized" }
+                    val executor = ExecutorEnvironment.from(client.observedEnvironment.value)
+                    val cwd = _workspace.value.takeIf { it.loaded && it.sessionId == client.currentSessionId.value }?.workingUri
+                        ?: executor.advertisedCwdUri
                     step(0, StepStatus.RUNNING, "Probing")
-                    val ep = repository.getEndpoint()
-                    val url = ep.replace("ws://", "http://").replace("wss://", "https://").trimEnd('/') + "/readyz"
+                    val ep = client.currentEndpoint ?: repository.getEndpoint()
+                    val url = ExecutorEnvironment.healthUrl(ep)
                     withContext(Dispatchers.IO) {
                         httpClient.newCall(Request.Builder().url(url).build()).execute().use {
                             check(it.isSuccessful) { "Health HTTP " + it.code }
                         }
                     }
                     step(0, StepStatus.PASSED, "Executor health reachable")
-                    check(client != null && client.connectionState.value == ConnectionState.INITIALIZED) { "Transport not initialized" }
                     step(1, StepStatus.PASSED, "Session=" + client.currentSessionId.value + "; OS=" + client.observedEnvironment.value?.platformOs)
                     val marker = java.util.UUID.randomUUID().toString().replace("-", "")
                     val oneId = java.util.UUID.randomUUID().toString()
                     owned.add(oneId)
                     step(2, StepStatus.RUNNING, "Executing owned process")
                     client.startProcess(
-                        argv = listOf("/system/bin/sh", "-c", "printf 'OUT:$marker\\n'; printf 'ERR:$marker\\n' >&2; printf 'UID:'; /system/bin/id -u; exit 42"),
-                        cwd = cwd, env = env, tty = false, title = "Acceptance One-Shot", processId = oneId
+                        argv = executor.commandArgv("printf 'OUT:$marker\\n'; printf 'ERR:$marker\\n' >&2; printf 'UID:'; id -u; exit 42"),
+                        cwd = cwd, env = executor.environment(tty = false), tty = false, title = "Acceptance One-Shot", processId = oneId
                     ).getOrThrow()
                     drainUntilExit(oneId)
                     val stdout = output(oneId, "stdout")
                     val stderr = output(oneId, "stderr")
                     check(stdout.contains("OUT:$marker") && stderr.contains("ERR:$marker")) { "Distinct markers missing" }
                     val uid = Regex("UID:(\\d+)").find(stdout)?.groupValues?.get(1)?.toIntOrNull()
-                    check(uid != null && uid != android.os.Process.myUid()) { "Executor UID missing or identical to APK UID: $uid" }
+                    check(uid != null) { "Executor UID missing" }
+                    if (executor.termux) check(uid != android.os.Process.myUid()) { "Termux executor must use its own UID, observed $uid" }
                     step(2, StepStatus.PASSED, "Distinct markers; executor UID=$uid; APK UID=" + android.os.Process.myUid())
                     check(repository.getProcess(oneId)?.exitCode == 42) { "Expected exit 42" }
                     step(3, StepStatus.PASSED, "Observed exit 42")
@@ -566,9 +543,8 @@ class MainViewModel(
                     owned.add(ptyId)
                     step(4, StepStatus.RUNNING, "Starting owned PTY")
                     client.startProcess(
-                        argv = listOf("/data/data/com.termux/files/usr/bin/bash", "-c",
-                            "read -r line; printf 'PTY_REPLY:%s\\n' \"\$line\"; printf 'UID:'; /system/bin/id -u; exit 7"),
-                        cwd = cwd, env = env, tty = true, title = "Acceptance PTY", processId = ptyId
+                        argv = executor.commandArgv("read -r line; printf 'PTY_REPLY:%s\\n' \"\$line\"; printf 'UID:'; id -u; exit 7"),
+                        cwd = cwd, env = executor.environment(tty = true), tty = true, title = "Acceptance PTY", processId = ptyId
                     ).getOrThrow()
                     val write = client.writeProcess(ptyId, "INPUT_$marker\n".toByteArray(Charsets.UTF_8))
                     check(write is com.example.transport.WriteStatus.Accepted) { "PTY write not accepted: $write" }
@@ -602,6 +578,9 @@ class MainViewModel(
                     val report = org.json.JSONObject().apply {
                         put("startedAt", startedAt); put("finishedAt", System.currentTimeMillis())
                         put("sessionId", client?.currentSessionId?.value ?: org.json.JSONObject.NULL)
+                        put("endpoint", client?.currentEndpoint ?: org.json.JSONObject.NULL)
+                        put("executorOs", client?.observedEnvironment?.value?.platformOs ?: org.json.JSONObject.NULL)
+                        put("executorShell", client?.observedEnvironment?.value?.shell?.path ?: org.json.JSONObject.NULL)
                         put("ownedProcessIds", org.json.JSONArray(owned))
                         put("cleanupErrors", org.json.JSONArray(cleanupErrors))
                         put("steps", org.json.JSONArray().apply {

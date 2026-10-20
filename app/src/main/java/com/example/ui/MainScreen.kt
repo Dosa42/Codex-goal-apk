@@ -93,7 +93,7 @@ fun MainScreen(
                             ConnectionBadge(connectionState)
                         }
                         Text(
-                            text = "Termux Exec-Server Native Client",
+                            text = "Exec-Server Native Client",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -410,7 +410,7 @@ fun EnvironmentCard(env: EnvironmentInfo?, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Observed Termux Environment", fontWeight = FontWeight.Bold)
+                Text("Observed Executor Environment", fontWeight = FontWeight.Bold)
                 IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Close, contentDescription = "Close")
                 }
@@ -456,7 +456,7 @@ fun ProcessesTab(viewModel: MainViewModel) {
                 Spacer(Modifier.height(8.dp))
                 Text("No Active or Past Processes", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("Spawn an interactive Termux bash shell or run commands.", style = MaterialTheme.typography.bodySmall)
+                Text("Open the connected executor shell or run commands.", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = { viewModel.launchBashShell() },
@@ -464,7 +464,7 @@ fun ProcessesTab(viewModel: MainViewModel) {
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Launch Interactive Bash Shell")
+                    Text("Launch Interactive Shell")
                 }
             }
         }
@@ -725,7 +725,7 @@ fun RunCommandTab(viewModel: MainViewModel) {
     ) {
         Text("Run One-Shot Shell Command", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Text(
-            "Executes commands under Termux executor via /system/bin/sh -c without PTY. Standard error is preserved separately.",
+            "Executes commands with the connected executor’s reported shell without PTY. Standard error is preserved separately.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -784,7 +784,7 @@ fun WorkspaceTab(viewModel: MainViewModel) {
     var createKind by remember { mutableStateOf<String?>(null) }
     var newName by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Termux Workspace", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text("Executor Workspace", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Text("Working folder: ${viewModel.workspacePath(state.workingUri)}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
         Text(state.status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
@@ -808,7 +808,7 @@ fun WorkspaceTab(viewModel: MainViewModel) {
                 fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { viewModel.saveWorkspaceFile() }, enabled = !state.busy && state.dirty,
-                    modifier = Modifier.testTag("workspace_save_file")) { Text("Save to Termux") }
+                    modifier = Modifier.testTag("workspace_save_file")) { Text("Save to executor") }
                 OutlinedButton(onClick = { viewModel.openWorkspaceFile(state.fileUri!!) }, enabled = !state.busy) { Text("Reload file") }
                 TextButton(onClick = { viewModel.closeWorkspaceFile() }, enabled = !state.busy) { Text(if (state.dirty) "Close / discard edits" else "Close file") }
             }

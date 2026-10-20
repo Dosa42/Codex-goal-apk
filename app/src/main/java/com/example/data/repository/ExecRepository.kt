@@ -72,6 +72,9 @@ class ExecRepository(private val db: AppDatabase) {
         return db.sessionDao().getLatestSession()
     }
 
+    suspend fun getLatestSessionForEndpoint(endpoint: String): SessionEntity? =
+        db.sessionDao().getLatestSessionForEndpoint(endpoint)
+
     fun getLatestSessionFlow(): Flow<SessionEntity?> {
         return db.sessionDao().getLatestSessionFlow()
     }

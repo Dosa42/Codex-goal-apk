@@ -17,6 +17,9 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY updatedAt DESC LIMIT 1")
     suspend fun getLatestSession(): SessionEntity?
 
+    @Query("SELECT * FROM sessions WHERE endpoint = :endpoint ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun getLatestSessionForEndpoint(endpoint: String): SessionEntity?
+
     @Query("UPDATE sessions SET status = :status, updatedAt = :timestamp WHERE sessionId = :sessionId")
     suspend fun updateStatus(sessionId: String, status: String, timestamp: Long)
 
