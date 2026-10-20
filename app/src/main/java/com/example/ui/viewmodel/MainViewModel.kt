@@ -12,6 +12,7 @@ import com.example.data.model.ConnectionState
 import com.example.data.model.EnvironmentInfo
 import com.example.data.model.ExecutorEnvironment
 import com.example.data.model.ProcessStatus
+import com.example.files.*
 import com.example.data.repository.ExecRepository
 import com.example.service.ExecServerService
 import com.example.service.TermuxLauncher
@@ -34,10 +35,17 @@ data class AcceptanceCheckStep(
 
 enum class StepStatus { PENDING, RUNNING, PASSED, FAILED }
 
-data class WorkspaceEntry(val name: String, val uri: String, val directory: Boolean, val file: Boolean)
+typealias WorkspaceEntry = FileEntry
 
 data class WorkspaceState(
     val workingUri: String = "",
+    val homeUri: String = "",
+    val downloadsUri: String = "",
+    val selected: WorkspaceEntry? = null,
+    val clipboard: FileClipboard? = null,
+    val fileConnection: FileSession? = null,
+    val operation: FilesOperation? = null,
+    val operations: List<FilesOperation> = emptyList(),
     val directoryUri: String = "",
     val configUri: String = "",
     val entries: List<WorkspaceEntry> = emptyList(),
@@ -49,7 +57,7 @@ data class WorkspaceState(
     val busy: Boolean = false,
     val loaded: Boolean = false,
     val sessionId: String? = null,
-    val status: String = "Connect to load the executor workspace",
+    val status: String = "Connect to browse executor files",
     val error: String? = null
 )
 
@@ -62,16 +70,55 @@ class MainViewModel(
     private val workspaceMutex = Mutex()
     private var operationClient: CodexWebSocketClient? = null
     private var operationGeneration: Long = -1
+    private var trackFileMutation = false
+    private var activeFilesOperation: FilesOperation? = null
+    private var filesOperationPaths: Pair<String, String>? = null
     private val _workspace = MutableStateFlow(WorkspaceState())
     val workspace: StateFlow<WorkspaceState> = _workspace.asStateFlow()
 
+    private val filesJournal = FileOperationJournal(
+        load = {
+            repository.getSetting("filesOperationHistory")?.let { saved ->
+                val value = org.json.JSONObject(saved)
+                val receipts = value.getJSONObject("receipts")
+                FileOperationHistory(value.optString("lastId").takeIf { it.isNotEmpty() },
+                    receipts.keys().asSequence().associateWith { parseFilesOperation(receipts.getJSONObject(it)) })
+            } ?: repository.getSetting("lastFilesOperation")?.let { legacy ->
+                val operation = parseFilesOperation(org.json.JSONObject(legacy))
+                FileOperationHistory(operation.id, mapOf(operation.id to operation))
+            } ?: FileOperationHistory()
+        },
+        save = { history ->
+            // Keyed receipts and last pointer are committed together in one Room setting row.
+            repository.putSetting("filesOperationHistory", org.json.JSONObject().apply {
+                put("formatVersion", 1)
+                put("lastId", history.lastId ?: "")
+                put("receipts", org.json.JSONObject().apply {
+                    history.receipts.forEach { (id, operation) -> put(id, filesOperationJson(operation)) }
+                })
+            }.toString())
+        }
+    )
+    private var filesJournalError: String? = null
+    private val restoreFilesOperation = viewModelScope.launch(Dispatchers.IO) {
+        try {
+            filesJournal.restore()
+            publishFilesHistory()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            filesJournalError = "Could not load Files operation history: ${e.message}"
+            _workspace.update { it.copy(error = filesJournalError) }
+        }
+    }
+
     init {
         viewModelScope.launch {
+            restoreFilesOperation.join()
             ExecServerService.activeClientFlow.flatMapLatest { client ->
                 client?.connectionState ?: flowOf(ConnectionState.DISCONNECTED)
             }.collect { state ->
                 if (state == ConnectionState.INITIALIZED) loadWorkspace()
-                else _workspace.update { it.copy(loaded = false, status = "Workspace connection: $state") }
+                else _workspace.update { it.copy(loaded = false, status = "Files connection: $state · retained edits/clipboard belong to their original session") }
             }
         }
     }
@@ -80,48 +127,156 @@ class MainViewModel(
         ?.takeIf { it.connectionState.value == ConnectionState.INITIALIZED }
         ?: throw IOException("Executor is not initialized")
 
-    private suspend fun CodexWebSocketClient.workspaceRpc(method: String, params: org.json.JSONObject): org.json.JSONObject {
-        check(this === operationClient && this === ExecServerService.activeClient) {
-            "Executor changed during operation; reload before retrying"
-        }
-        return fileSystemRequest(method, params, operationGeneration)
+    private fun CodexWebSocketClient.fileSession(): FileSession = FileSession(
+        currentEndpoint.orEmpty(), requireNotNull(currentSessionId.value) { "Executor session unavailable" }, socketGeneration)
+
+    private fun currentFileSession(): FileSession? = ExecServerService.activeClient
+        ?.takeIf { it.connectionState.value == ConnectionState.INITIALIZED }?.fileSession()
+
+    private fun filesOperationJson(operation: FilesOperation) = org.json.JSONObject().apply {
+            put("id", operation.id); put("endpoint", operation.endpoint); put("source", operation.source)
+            put("destination", operation.destination); put("phase", operation.phase)
+            put("requiresInspection", operation.requiresInspection)
+            put("verified", operation.verified); put("lastError", operation.lastError ?: org.json.JSONObject.NULL)
+            put("requests", org.json.JSONArray().apply { operation.requests.forEach { request ->
+                put(org.json.JSONObject().put("requestedAt", request.requestedAt).put("method", request.method)
+                    .put("source", request.source).put("destination", request.destination))
+            } })
+            put("observations", org.json.JSONArray().apply { operation.observations.forEach { observation ->
+                put(org.json.JSONObject().put("observedAt", observation.observedAt).put("text", observation.text))
+            } })
+            put("resolution", operation.resolution?.let { resolution ->
+                org.json.JSONObject().put("recordedAt", resolution.recordedAt).put("note", resolution.note)
+            } ?: org.json.JSONObject.NULL)
     }
 
-    private fun childUri(parent: String, name: String): String = ExecutorEnvironment.childUri(parent, name)
+    private fun parseFilesOperation(value: org.json.JSONObject): FilesOperation {
+        val requests = value.optJSONArray("requests")
+        val observations = value.optJSONArray("observations")
+        val resolution = value.optJSONObject("resolution")
+        return FilesOperation(value.getString("id"), value.getString("endpoint"), value.optString("source"),
+            value.optString("destination"), value.getString("phase"), value.getBoolean("requiresInspection"),
+            verified = value.optBoolean("verified"),
+            lastError = if (value.isNull("lastError")) null else value.optString("lastError").takeIf { it.isNotEmpty() },
+            requests = if (requests == null) emptyList() else (0 until requests.length()).map { index ->
+                val request = requests.getJSONObject(index)
+                FileMutationIntent(request.getLong("requestedAt"), request.getString("method"), request.getString("source"), request.getString("destination"))
+            },
+            observations = if (observations == null) emptyList() else (0 until observations.length()).map { index ->
+                val observation = observations.getJSONObject(index)
+                FileOperationObservation(observation.getLong("observedAt"), observation.getString("text"))
+            },
+            resolution = resolution?.let { FileOperationResolution(it.getLong("recordedAt"), it.getString("note")) })
+    }
 
-    fun workspacePath(uri: String): String = android.net.Uri.parse(uri).path ?: uri
+    private fun publishFilesHistory(selectedId: String? = _workspace.value.operation?.id) {
+        val history = filesJournal.history
+        _workspace.update { it.copy(
+            operation = history.receipts[selectedId] ?: history.receipts[history.lastId],
+            operations = history.receipts.values.toList().asReversed()
+        ) }
+    }
 
-    private fun pathUri(value: String): String = ExecutorEnvironment.fileUri(value.trim())
+    private suspend fun persistFilesOperation(operation: FilesOperation) {
+        filesJournal.record(operation)
+        publishFilesHistory(operation.id)
+    }
 
-    private fun workspaceAction(action: suspend () -> Unit) {
-        viewModelScope.launch {
+    private suspend fun retainFilesFailure(message: String) {
+        var error = message
+        try {
+            activeFilesOperation?.let { persistFilesOperation(it.copy(lastError = message)) }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            error += " · Could not update operation error receipt: ${e.message}"
+        }
+        _workspace.update { it.copy(error = error) }
+    }
+
+    private suspend fun CodexWebSocketClient.workspaceRpc(method: String, params: org.json.JSONObject): org.json.JSONObject {
+        check(this === operationClient && this === ExecServerService.activeClient && socketGeneration == operationGeneration) {
+            "Executor changed during operation; inspect before retrying"
+        }
+        if (trackFileMutation && method in setOf("fs/copy", "fs/remove", "fs/writeFile", "fs/createDirectory")) {
+            val previous = activeFilesOperation
+            val requestSource = params.optString("sourcePath", params.optString("path"))
+            val requestDestination = params.optString("destinationPath", params.optString("path"))
+            val source = previous?.source ?: filesOperationPaths?.first ?: requestSource
+            val destination = previous?.destination ?: filesOperationPaths?.second ?: requestDestination
+            val label = when (method) { "fs/copy" -> "Copy"; "fs/remove" -> "Remove"; "fs/writeFile" -> "Write"; else -> "Create folder" }
+            val record = FilesOperation(previous?.id ?: java.util.UUID.randomUUID().toString(), currentEndpoint.orEmpty(),
+                source, destination, "$label requested · outcome not yet verified", true,
+                requests = previous?.requests.orEmpty() + FileMutationIntent(System.currentTimeMillis(), method, requestSource, requestDestination))
+            persistFilesOperation(record) // durable intent precedes mutation; never automatically replay it
+            activeFilesOperation = record
+        }
+        check(this === ExecServerService.activeClient && socketGeneration == operationGeneration) { "Executor changed before filesystem dispatch; inspect before retrying" }
+        val response = fileSystemRequest(method, params, operationGeneration)
+        check(this === ExecServerService.activeClient && socketGeneration == operationGeneration) { "Executor changed during operation; inspect before retrying" }
+        return response
+    }
+
+    private fun fileOps(client: CodexWebSocketClient): ExecutorFileOps = ExecutorFileOps(client.fileSession(), ::currentFileSession, FileRpc { method, params ->
+        val response = client.workspaceRpc(method, org.json.JSONObject(params))
+        FsResponse(
+            path = if (response.has("path")) response.getString("path") else null,
+            entries = response.optJSONArray("entries")?.let { array -> (0 until array.length()).map { index ->
+                val entry = array.getJSONObject(index)
+                val name = entry.getString("fileName")
+                FileEntry(name, childUri(params.getValue("path").toString(), name), entry.getBoolean("isDirectory"), entry.getBoolean("isFile"))
+            } } ?: emptyList(),
+            dataBase64 = if (response.has("dataBase64")) response.getString("dataBase64") else null,
+            directory = response.optBoolean("isDirectory"), file = response.optBoolean("isFile"), symlink = response.optBoolean("isSymlink")
+        )
+    })
+
+    private fun childUri(parent: String, name: String): String = FilePaths.child(parent, name)
+    fun workspacePath(uri: String): String = if (uri.isBlank()) "" else FilePaths.path(uri)
+    private fun pathUri(value: String): String = FilePaths.uri(value)
+
+    private fun workspaceAction(mutating: Boolean = false, executorRequired: Boolean = true, action: suspend () -> Unit) {
+        if (_workspace.value.busy) return // clicks are not queued for a different connection
+        val requestedClient = ExecServerService.activeClient
+        val requestedSession = currentFileSession()
+        _workspace.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            restoreFilesOperation.join()
             workspaceMutex.withLock {
-                _workspace.update { it.copy(busy = true, error = null) }
                 try {
-                    operationClient = workspaceClient()
-                    operationGeneration = operationClient!!.socketGeneration
+                    if (executorRequired) check(requestedClient === ExecServerService.activeClient && requestedSession == currentFileSession()) { "Executor changed before operation; inspect before retrying" }
+                    if (mutating) {
+                        check(filesJournalError == null) { filesJournalError.orEmpty() }
+                        filesJournal.requireMutationAllowed()
+                    }
+                    operationClient = if (executorRequired) workspaceClient() else null
+                    operationGeneration = operationClient?.socketGeneration ?: -1
+                    trackFileMutation = mutating
+                    activeFilesOperation = null
+                    filesOperationPaths = null
                     action()
+                    activeFilesOperation?.let { persistFilesOperation(it.copy(phase = "Completed and verified", requiresInspection = false, verified = true)) }
                 }
-                catch (e: TimeoutCancellationException) { _workspace.update { it.copy(error = "Filesystem request timed out. A write may have reached the executor; reload to inspect its result.") } }
+                catch (e: TimeoutCancellationException) { retainFilesFailure("Filesystem request timed out. Inspect the operation; a write may have reached the executor.") }
                 catch (e: CancellationException) { throw e }
-                catch (e: Exception) { _workspace.update { it.copy(error = e.message ?: e.javaClass.name) } }
+                catch (e: Exception) { retainFilesFailure(e.message ?: e.javaClass.name) }
                 finally {
                     operationClient = null
                     operationGeneration = -1
+                    trackFileMutation = false
+                    activeFilesOperation = null
+                    filesOperationPaths = null
                     _workspace.update { it.copy(busy = false) }
                     if (currentCoroutineContext().isActive) {
                         val state = _workspace.value
                         val client = ExecServerService.activeClient
                         repository.putSetting("lastWorkspaceSnapshot", org.json.JSONObject().apply {
-                            put("timestamp", System.currentTimeMillis())
-                            put("sessionId", client?.currentSessionId?.value ?: org.json.JSONObject.NULL)
-                            put("socketGeneration", client?.socketGeneration ?: -1)
-                            put("loaded", state.loaded); put("workingUri", state.workingUri)
-                            put("directoryUri", state.directoryUri); put("configUri", state.configUri)
-                            put("fileUri", state.fileUri ?: org.json.JSONObject.NULL)
-                            put("dirty", state.dirty); put("status", state.status)
-                            put("error", state.error ?: org.json.JSONObject.NULL)
-                            put("entryCount", state.entries.size)
+                            put("timestamp", System.currentTimeMillis()); put("sessionId", client?.currentSessionId?.value ?: org.json.JSONObject.NULL)
+                            put("socketGeneration", client?.socketGeneration ?: -1); put("loaded", state.loaded); put("workingUri", state.workingUri)
+                            put("directoryUri", state.directoryUri); put("configUri", state.configUri); put("fileUri", state.fileUri ?: org.json.JSONObject.NULL)
+                            put("dirty", state.dirty); put("status", state.status); put("error", state.error ?: org.json.JSONObject.NULL); put("entryCount", state.entries.size)
+                            put("selectedUri", state.selected?.uri ?: org.json.JSONObject.NULL)
+                            put("clipboardUri", state.clipboard?.entry?.uri ?: org.json.JSONObject.NULL)
+                            put("operationId", state.operation?.id ?: org.json.JSONObject.NULL)
                         }.toString())
                     }
                 }
@@ -143,60 +298,57 @@ class MainViewModel(
         val client = workspaceClient()
         val generation = client.socketGeneration
         val executor = ExecutorEnvironment.from(client.observedEnvironment.value)
-        val settingsDir = executor.configDirectoryUri
         val configUri = executor.configUri
+        _workspace.update { it.copy(homeUri = executor.homeUri,
+            downloadsUri = if (executor.termux) "file:///storage/emulated/0/Download" else childUri(executor.homeUri, "Downloads"), configUri = configUri) }
         check(!_workspace.value.dirty || _workspace.value.fileSessionId == client.currentSessionId.value) {
             "Pending edits belong to another executor session; copy or close that file before loading this workspace"
         }
         var working = executor.defaultWorkingUri
         var status = "Default working folder; no workspace setting saved yet"
-        var foundConfig = false
-        client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", settingsDir).put("recursive", true))
-        if (listWorkspace(client, settingsDir).any { it.name == "workspace.json" && it.file }) {
-            val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri))
-            val config = org.json.JSONObject(String(Base64.decode(response.getString("dataBase64"), Base64.NO_WRAP), Charsets.UTF_8))
+        val settingsComponents = FilePaths.path(configUri)
+            .removePrefix(FilePaths.path(executor.homeUri).trimEnd('/') + "/").split('/')
+        val savedConfig = fileOps(client).readOptionalFile(executor.homeUri, settingsComponents)
+        if (savedConfig != null) {
+            val config = org.json.JSONObject(String(Base64.decode(savedConfig, Base64.NO_WRAP), Charsets.UTF_8))
             check(config.getInt("formatVersion") == 1) { "Unsupported workspace setting format" }
             working = pathUri(config.getString("workspaceUri"))
             status = "Working folder loaded from executor (${executor.platformOs})"
-            foundConfig = true
         }
         val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", working)).getString("path")
         val entries = listWorkspace(client, canonical)
-        if (!foundConfig) {
-            client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", settingsDir).put("recursive", true))
-            val config = org.json.JSONObject().put("formatVersion", 1).put("workspaceUri", canonical).toString(2) + "\n"
-            val encoded = Base64.encodeToString(config.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", configUri).put("dataBase64", encoded))
-            check(client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri)).getString("dataBase64") == encoded) {
-                "Default workspace setting readback differs; reload"
-            }
-            status = "Default workspace setting created and read back on executor (${executor.platformOs})"
-        }
         check(client.socketGeneration == generation) { "Connection changed while loading workspace; reload" }
         _workspace.update { it.copy(workingUri = canonical, directoryUri = canonical, configUri = configUri, sessionId = client.currentSessionId.value,
-            entries = entries, loaded = true, status = status) }
+            homeUri = executor.homeUri, downloadsUri = if (executor.termux) "file:///storage/emulated/0/Download" else childUri(executor.homeUri, "Downloads"),
+            selected = null, entries = entries, loaded = true, status = "$status · session ${client.currentSessionId.value}") }
     }
 
-    fun browseWorkspace(path: String) = workspaceAction {
+    fun browseWorkspace(path: String) = workspaceAction { browseWorkspaceNow(path) }
+
+    private suspend fun browseWorkspaceNow(path: String) {
         check(!_workspace.value.dirty) { "Save the open file or close it before changing folders" }
         val client = workspaceClient()
         val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", pathUri(path))).getString("path")
         val entries = listWorkspace(client, canonical)
         _workspace.update { it.copy(directoryUri = canonical, entries = entries, fileUri = null, fileSessionId = null,
-            text = "", originalBase64 = null, dirty = false, status = "Folder read from executor") }
+            text = "", originalBase64 = null, dirty = false, selected = null, fileConnection = null,
+            sessionId = client.currentSessionId.value, loaded = true, status = "Folder read from executor · session ${client.currentSessionId.value}") }
     }
 
     fun workspaceUp() {
-        val parent = java.io.File(workspacePath(_workspace.value.directoryUri)).parent ?: "/"
-        browseWorkspace(parent)
+        browseWorkspace(FilePaths.parent(_workspace.value.directoryUri))
     }
 
-    fun useWorkspaceDirectory() = workspaceAction {
+    fun useWorkspaceDirectory() = workspaceAction(mutating = true) {
         val client = workspaceClient()
         val state = _workspace.value
         check(state.loaded && state.configUri.isNotEmpty()) { "Load the workspace first" }
+        filesOperationPaths = state.configUri to state.configUri
         val parent = state.configUri.substringBeforeLast('/')
         client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", parent).put("recursive", true))
+        check(client.workspaceRpc("fs/getMetadata", org.json.JSONObject().put("path", parent)).getBoolean("isDirectory")) {
+            "Workspace settings folder could not be verified"
+        }
         val text = org.json.JSONObject().put("formatVersion", 1).put("workspaceUri", state.directoryUri).toString(2) + "\n"
         val encoded = Base64.encodeToString(text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", state.configUri).put("dataBase64", encoded))
@@ -205,38 +357,128 @@ class MainViewModel(
         _workspace.update { it.copy(workingUri = state.directoryUri, status = "Working folder saved and read back on executor") }
     }
 
-    fun openWorkspaceFile(uri: String) = workspaceAction {
+    fun openWorkspaceFile(uri: String) = workspaceAction { openWorkspaceFileNow(uri) }
+
+    fun openWorkspaceEntry(entry: WorkspaceEntry) = workspaceAction {
+        check(_workspace.value.loaded) { "Load the current executor folder first" }
+        val actual = fileOps(workspaceClient()).resolve(entry)
+        when {
+            actual.directory -> browseWorkspaceNow(actual.uri)
+            actual.file -> openWorkspaceFileNow(actual.uri)
+            else -> error("Selected entry is not a regular file or folder")
+        }
+    }
+
+    private suspend fun openWorkspaceFileNow(uri: String) {
+        check(!_workspace.value.dirty) { "Save or explicitly discard pending edits before opening another file" }
         val client = workspaceClient()
         val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri)))
         val encoded = response.getString("dataBase64")
         val bytes = Base64.decode(encoded, Base64.NO_WRAP)
         val text = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString()
         _workspace.update { it.copy(fileUri = uri, fileSessionId = client.currentSessionId.value,
-            text = text, originalBase64 = encoded, dirty = false, status = "UTF-8 file read from executor") }
+            text = text, originalBase64 = encoded, dirty = false, selected = null, fileConnection = client.fileSession(),
+            status = "UTF-8 file read from executor · session ${client.currentSessionId.value}") }
     }
 
-    fun editWorkspaceText(text: String) { _workspace.update { it.copy(text = text, dirty = true) } }
+    fun editWorkspaceText(text: String) { if (!_workspace.value.busy) _workspace.update { it.copy(text = text, dirty = true) } }
 
-    fun closeWorkspaceFile() { _workspace.update { it.copy(fileUri = null, fileSessionId = null, text = "", originalBase64 = null, dirty = false) } }
+    fun closeWorkspaceFile() { if (!_workspace.value.busy) _workspace.update { it.copy(fileUri = null, fileSessionId = null, fileConnection = null, text = "", originalBase64 = null, dirty = false) } }
 
-    fun createWorkspaceEntry(name: String, directory: Boolean) = workspaceAction {
-        require(name.isNotBlank() && name !in listOf(".", "..") && '/' !in name && '\u0000' !in name) { "Enter one file or folder name" }
+    fun createWorkspaceEntry(name: String, directory: Boolean) = workspaceAction(mutating = true) {
         val client = workspaceClient()
         val state = _workspace.value
-        check(state.loaded) { "Load the workspace first" }
-        check(listWorkspace(client, state.directoryUri).none { it.name == name }) { "An entry with that name already exists" }
-        val uri = childUri(state.directoryUri, name)
-        if (directory) client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", uri).put("recursive", false))
-        else client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", uri).put("dataBase64", ""))
+        check(state.loaded) { "Connect and open a folder first" }
+        fileOps(client).create(state.directoryUri, name, directory)
         val entries = listWorkspace(client, state.directoryUri)
-        _workspace.update { it.copy(entries = entries, status = "Created on executor: $name") }
+        _workspace.update { it.copy(entries = entries, status = "Created and verified: $name") }
     }
 
-    fun saveWorkspaceFile() = workspaceAction {
+    fun refreshFiles() = workspaceAction {
+        val client = workspaceClient()
+        val directory = _workspace.value.directoryUri
+        val entries = listWorkspace(client, directory)
+        _workspace.update { it.copy(entries = entries, loaded = true, selected = it.selected?.takeIf { selected -> entries.any { entry -> entry.uri == selected.uri } },
+            status = "Folder refreshed · session ${client.currentSessionId.value}") }
+    }
+
+    fun selectWorkspaceEntry(entry: WorkspaceEntry) { if (!_workspace.value.busy) _workspace.update { it.copy(selected = entry) } }
+    fun copyWorkspaceEntry(cut: Boolean) {
+        if (_workspace.value.busy) return
+        runCatching {
+            check(_workspace.value.loaded) { "Load the current executor folder first" }
+            val entry = requireNotNull(_workspace.value.selected) { "Select a file or folder first" }
+            val session = requireNotNull(currentFileSession()) { "Executor is not connected" }
+            _workspace.update { it.copy(clipboard = FileClipboard(entry, cut, session), status = "${if (cut) "Cut" else "Copied"} to Files clipboard: ${entry.name}", error = null) }
+        }.onFailure { error -> _workspace.update { it.copy(error = error.message) } }
+    }
+    fun clearFilesClipboard() { if (!_workspace.value.busy) _workspace.update { it.copy(clipboard = null) } }
+
+    fun pasteWorkspaceEntry() = workspaceAction(mutating = true) {
+        val client = workspaceClient()
+        val state = _workspace.value
+        val clipboard = requireNotNull(state.clipboard) { "Copy or Cut an entry first" }
+        val destination = fileOps(client).transfer(clipboard, state.directoryUri)
+        val entries = listWorkspace(client, state.directoryUri)
+        _workspace.update { it.copy(entries = entries, clipboard = if (clipboard.cut) null else clipboard,
+            status = "${if (clipboard.cut) "Moved" else "Copied"} and verified: ${workspacePath(destination)}") }
+    }
+
+    fun renameWorkspaceEntry(name: String, target: WorkspaceEntry? = null) = workspaceAction(mutating = true) {
+        val client = workspaceClient()
+        val state = _workspace.value
+        val entry = requireNotNull(target ?: state.selected) { "Select an entry first" }
+        check(state.loaded && state.selected == entry) { "Selection changed; select the entry again" }
+        check(!state.dirty) { "Save or close pending edits before renaming" }
+        val destination = fileOps(client).transfer(FileClipboard(entry, true, client.fileSession()), FilePaths.parent(entry.uri), name)
+        val entries = listWorkspace(client, state.directoryUri)
+        _workspace.update { it.copy(entries = entries, selected = entries.find { item -> item.uri == destination },
+            status = "Renamed by copy, verification and removal: $name") }
+    }
+
+    fun deleteWorkspaceEntry(target: WorkspaceEntry? = null) = workspaceAction(mutating = true) {
+        val client = workspaceClient()
+        val state = _workspace.value
+        val entry = requireNotNull(target ?: state.selected) { "Select an entry first" }
+        check(state.loaded && state.selected == entry) { "Selection changed; select the entry again" }
+        check(!state.dirty) { "Save or close pending edits before deleting" }
+        fileOps(client).delete(entry)
+        val entries = listWorkspace(client, state.directoryUri)
+        _workspace.update { it.copy(entries = entries, selected = null, status = "Removed and verified: ${entry.name}") }
+    }
+
+    fun inspectFilesOperation() = workspaceAction {
+        val client = workspaceClient()
+        val record = requireNotNull(_workspace.value.operation) { "No operation recorded" }
+        check(record.endpoint == client.currentEndpoint) { "Connect to the operation's original executor: ${record.endpoint}" }
+        val ops = fileOps(client)
+        suspend fun presence(path: String): String = if (path.isBlank()) "not applicable" else
+            if (ops.list(FilePaths.parent(path)).any { it.name == FilePaths.name(path) }) "present" else "absent"
+        val observation = "Source ${presence(record.source)}, destination ${presence(record.destination)}. Presence does not verify operation completion."
+        filesJournal.observe(record.id, observation, System.currentTimeMillis())
+        publishFilesHistory(record.id)
+        _workspace.update { it.copy(status = observation) }
+    }
+
+    fun selectFilesOperation(id: String) {
+        if (!_workspace.value.busy) _workspace.update { state ->
+            state.copy(operation = state.operations.find { it.id == id } ?: state.operation)
+        }
+    }
+
+    fun resolveFilesOperation(id: String, note: String) = workspaceAction(executorRequired = false) {
+        check(filesJournalError == null) { filesJournalError.orEmpty() }
+        val record = requireNotNull(filesJournal.history.receipts[id]) { "Operation not found: $id" }
+        filesJournal.resolve(record.id, note, System.currentTimeMillis())
+        publishFilesHistory(record.id)
+        _workspace.update { it.copy(status = "Manual resolution recorded for ${record.id}; outcome remains ${if (record.verified) "verified" else "unverified"}") }
+    }
+
+    fun saveWorkspaceFile() = workspaceAction(mutating = true) {
         val client = workspaceClient()
         val state = _workspace.value
         val uri = state.fileUri ?: throw IOException("No file selected")
-        check(state.fileSessionId != null && state.fileSessionId == client.currentSessionId.value) {
+        check(state.fileConnection == client.fileSession()) {
             "Executor session changed since opening this file; copy pending edits and reload the file before saving"
         }
         val current = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri))).getString("dataBase64")

@@ -28,6 +28,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,6 +42,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.console.ConsoleScreen
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import com.example.ui.viewmodel.WorkspaceEntry
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,7 +70,7 @@ import com.example.ui.viewmodel.StepStatus
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
@@ -85,6 +90,7 @@ fun MainScreen(
     var showEnvCard by remember { mutableStateOf(false) }
 
     Scaffold(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         topBar = {
             TopAppBar(
                 title = {
@@ -95,14 +101,14 @@ fun MainScreen(
                             if (selectedTab > 0) ConnectionBadge(connectionState)
                         }
                         Text(
-                            text = if (selectedTab == 0) "Native Goal Console" else "Exec-Server Native Client",
+                            text = when (selectedTab) { 0 -> "Native Goal Console"; 1 -> "Executor Files"; else -> "Exec-Server Native Client" },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
                 actions = {
-                    if (selectedTab > 0) IconButton(
+                    if (selectedTab > 1) IconButton(
                         onClick = { showEnvCard = !showEnvCard },
                         modifier = Modifier.testTag("toggle_env_btn")
                     ) {
@@ -124,7 +130,7 @@ fun MainScreen(
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
         ) {
-            if (selectedTab > 0) {
+            if (selectedTab > 1) {
                 // Connection & Endpoint Control Bar
                 ConnectionControlBar(
                     endpoint = endpointInput,
@@ -202,73 +208,34 @@ fun MainScreen(
                 }
             }
 
-            // Navigation Tabs
-            PrimaryScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                edgePadding = 0.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Console") },
-                    icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_console")
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Processes") },
-                    icon = { Icon(Icons.Default.Terminal, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_processes")
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text("Run Command") },
-                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_run_command")
-                )
-                Tab(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
-                    text = { Text("Protocol Log") },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_protocol_log")
-                )
-                Tab(
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
-                    text = { Text("Diagnostics") },
-                    icon = { Icon(Icons.Default.BugReport, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_diagnostics")
-                )
-                Tab(
-                    selected = selectedTab == 5,
-                    onClick = { selectedTab = 5 },
-                    text = { Text("Permissions") },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_permissions")
-                )
-                Tab(
-                    selected = selectedTab == 6,
-                    onClick = { selectedTab = 6 },
-                    text = { Text("Workspace") },
-                    icon = { Icon(Icons.Default.Folder, contentDescription = null) },
-                    modifier = Modifier.testTag("tab_workspace")
-                )
+            // Navigation Tabs: Files is immediately beside Console.
+            PrimaryScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 0.dp, modifier = Modifier.fillMaxWidth()) {
+                Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Console") },
+                    icon = { Icon(Icons.Default.Dashboard, contentDescription = null) }, modifier = Modifier.testTag("tab_console"))
+                Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Files") },
+                    icon = { Icon(Icons.Default.Folder, contentDescription = null) }, modifier = Modifier.testTag("tab_workspace"))
+                Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Processes") },
+                    icon = { Icon(Icons.Default.Terminal, contentDescription = null) }, modifier = Modifier.testTag("tab_processes"))
+                Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text("Run Command") },
+                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }, modifier = Modifier.testTag("tab_run_command"))
+                Tab(selected = selectedTab == 4, onClick = { selectedTab = 4 }, text = { Text("Protocol Log") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) }, modifier = Modifier.testTag("tab_protocol_log"))
+                Tab(selected = selectedTab == 5, onClick = { selectedTab = 5 }, text = { Text("Diagnostics") },
+                    icon = { Icon(Icons.Default.BugReport, contentDescription = null) }, modifier = Modifier.testTag("tab_diagnostics"))
+                Tab(selected = selectedTab == 6, onClick = { selectedTab = 6 }, text = { Text("Permissions") },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) }, modifier = Modifier.testTag("tab_permissions"))
             }
 
             // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (selectedTab) {
                     0 -> ConsoleScreen()
-                    1 -> ProcessesTab(viewModel)
-                    2 -> RunCommandTab(viewModel)
-                    3 -> ProtocolLogTab(viewModel)
-                    4 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
-                    5 -> PermissionsTab()
-                    6 -> WorkspaceTab(viewModel)
+                    1 -> WorkspaceTab(viewModel)
+                    2 -> ProcessesTab(viewModel)
+                    3 -> RunCommandTab(viewModel)
+                    4 -> ProtocolLogTab(viewModel)
+                    5 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
+                    6 -> PermissionsTab()
                 }
             }
         }
@@ -793,63 +760,190 @@ fun RunCommandTab(viewModel: MainViewModel) {
 @Composable
 fun WorkspaceTab(viewModel: MainViewModel) {
     val state by viewModel.workspace.collectAsState()
+    val connection by viewModel.connectionState.collectAsState()
+    val connectionError by viewModel.lastConnectionError.collectAsState()
+    val context = LocalContext.current
     var path by remember(state.directoryUri) { mutableStateOf(viewModel.workspacePath(state.directoryUri)) }
-    var createKind by remember { mutableStateOf<String?>(null) }
+    var nameDialog by remember { mutableStateOf<String?>(null) }
     var newName by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Executor Workspace", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Text("Working folder: ${viewModel.workspacePath(state.workingUri)}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-        Text(state.status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
-        if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        OutlinedTextField(value = path, onValueChange = { path = it }, singleLine = true,
-            label = { Text("Executor folder") }, modifier = Modifier.fillMaxWidth().testTag("workspace_path"),
-            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(onClick = { viewModel.browseWorkspace(path) }, enabled = !state.busy && state.loaded) { Text("Open folder") }
-            OutlinedButton(onClick = { viewModel.workspaceUp() }, enabled = !state.busy && state.loaded) { Text("Up") }
-            OutlinedButton(onClick = { viewModel.loadWorkspace() }, enabled = !state.busy) { Text("Reload workspace") }
-            Button(onClick = { viewModel.useWorkspaceDirectory() }, enabled = !state.busy && state.loaded,
-                modifier = Modifier.testTag("workspace_use_folder")) { Text("Use as working folder") }
-            OutlinedButton(onClick = { newName = ""; createKind = "file" }, enabled = !state.busy && state.loaded) { Text("New file") }
-            OutlinedButton(onClick = { newName = ""; createKind = "folder" }, enabled = !state.busy && state.loaded) { Text("New folder") }
-        }
-        if (state.configUri.isNotBlank()) Text("Setting: ${viewModel.workspacePath(state.configUri)}", fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
-        if (state.fileUri != null) {
-            Text(viewModel.workspacePath(state.fileUri!!) + if (state.dirty) "  • unsaved" else "", fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { viewModel.saveWorkspaceFile() }, enabled = !state.busy && state.dirty,
-                    modifier = Modifier.testTag("workspace_save_file")) { Text("Save to executor") }
-                OutlinedButton(onClick = { viewModel.openWorkspaceFile(state.fileUri!!) }, enabled = !state.busy) { Text("Reload file") }
-                TextButton(onClick = { viewModel.closeWorkspaceFile() }, enabled = !state.busy) { Text(if (state.dirty) "Close / discard edits" else "Close file") }
+    var deleteTarget by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var renameTarget by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var discardAction by remember { mutableStateOf<String?>(null) }
+    var showFilesHistory by remember { mutableStateOf(false) }
+    var resolutionTarget by remember { mutableStateOf<String?>(null) }
+    var resolutionNote by remember { mutableStateOf("") }
+    val canBrowse = !state.busy && state.loaded
+    val canNavigate = !state.busy && connection == ConnectionState.INITIALIZED
+    val canMutate = canBrowse && state.operations.none { it.requiresInspection }
+    BoxWithConstraints(Modifier.fillMaxSize().imePadding().testTag("files_root")) {
+        val headerMaxHeight = maxHeight / 3
+        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+            if (state.fileUri == null) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { viewModel.browseWorkspace(state.homeUri) }, enabled = canNavigate && state.homeUri.isNotBlank(),
+                        modifier = Modifier.testTag("files_home")) { Text("Termux home".takeIf { state.homeUri.contains("com.termux/") } ?: "Home") }
+                    OutlinedButton(onClick = { viewModel.browseWorkspace(state.downloadsUri) }, enabled = canNavigate && state.downloadsUri.isNotBlank(),
+                        modifier = Modifier.testTag("files_downloads")) { Text("Downloads") }
+                    OutlinedButton(onClick = viewModel::workspaceUp, enabled = canBrowse, modifier = Modifier.testTag("files_up")) { Text("Up") }
+                    OutlinedButton(onClick = viewModel::refreshFiles, enabled = !state.busy && state.directoryUri.isNotBlank(),
+                        modifier = Modifier.testTag("files_refresh")) { Text("Refresh") }
+                }
+            } else {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(onClick = viewModel::saveWorkspaceFile, enabled = canMutate && state.dirty,
+                        modifier = Modifier.testTag("workspace_save_file")) { Text("Save") }
+                    OutlinedButton(onClick = {
+                        if (state.dirty) discardAction = "reload" else viewModel.openWorkspaceFile(state.fileUri!!)
+                    }, enabled = canBrowse, modifier = Modifier.testTag("files_reload_file")) { Text("Reload") }
+                    TextButton(onClick = {
+                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("File text", state.text))
+                    }, modifier = Modifier.testTag("files_copy_text")) { Text("Copy text") }
+                    TextButton(onClick = { if (state.dirty) discardAction = "close" else viewModel.closeWorkspaceFile() }, enabled = !state.busy,
+                        modifier = Modifier.testTag("files_close_file")) { Text("Close") }
+                }
             }
-            OutlinedTextField(value = state.text, onValueChange = { viewModel.editWorkspaceText(it) },
-                readOnly = state.busy, modifier = Modifier.fillMaxWidth().weight(1f).testTag("workspace_editor"),
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-        } else {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                items(state.entries, key = { it.uri }) { entry ->
-                    Row(Modifier.fillMaxWidth().clickable(enabled = !state.busy) {
-                        if (entry.directory) viewModel.browseWorkspace(entry.uri) else viewModel.openWorkspaceFile(entry.uri)
-                    }.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.Description, contentDescription = null,
-                            modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(entry.name, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+            Column(Modifier.fillMaxWidth().heightIn(max = headerMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Files · $connection", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                state.fileUri?.let { Text(viewModel.workspacePath(it) + if (state.dirty) "  • unsaved" else "", fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+                if (!state.loaded) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { viewModel.connect(context) }, enabled = !state.busy, modifier = Modifier.testTag("files_connect")) { Text("Connect executor") }
+                    OutlinedButton(onClick = viewModel::loadWorkspace, enabled = !state.busy, modifier = Modifier.testTag("files_load")) { Text("Load files") }
+                }
+                Text(state.status, fontSize = 12.sp, modifier = Modifier.testTag("files_status"))
+                connectionError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("files_connection_error")) }
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("files_error")) }
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                OutlinedTextField(value = path, onValueChange = { path = it }, singleLine = true,
+                    label = { Text("Folder path") }, modifier = Modifier.fillMaxWidth().testTag("workspace_path"),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { viewModel.browseWorkspace(path) }, enabled = canNavigate, modifier = Modifier.testTag("files_open_path")) { Text("Open path") }
+                    OutlinedButton(onClick = { newName = ""; nameDialog = "file" }, enabled = canMutate, modifier = Modifier.testTag("files_new_file")) { Text("New file") }
+                    OutlinedButton(onClick = { newName = ""; nameDialog = "folder" }, enabled = canMutate, modifier = Modifier.testTag("files_new_folder")) { Text("New folder") }
+                    OutlinedButton(onClick = viewModel::useWorkspaceDirectory, enabled = canMutate, modifier = Modifier.testTag("workspace_use_folder")) { Text("Use as working folder") }
+                }
+                Text("Working folder: ${viewModel.workspacePath(state.workingUri)}", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                if (state.configUri.isNotBlank()) Text("Setting: ${viewModel.workspacePath(state.configUri)}", fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                state.clipboard?.let { clipboard ->
+                    Text("${if (clipboard.cut) "Cut" else "Copy"}: ${viewModel.workspacePath(clipboard.entry.uri)} · session ${clipboard.session.sessionId}",
+                        fontSize = 12.sp, modifier = Modifier.testTag("files_clipboard"))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = viewModel::pasteWorkspaceEntry, enabled = canMutate, modifier = Modifier.testTag("files_paste")) { Text("Paste here") }
+                        TextButton(onClick = viewModel::clearFilesClipboard, enabled = !state.busy, modifier = Modifier.testTag("files_clipboard_clear")) { Text("Clear clipboard") }
+                    }
+                }
+                state.selected?.let { selected ->
+                    Text("Selected: ${selected.name}", modifier = Modifier.testTag("files_selected"))
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(onClick = { viewModel.copyWorkspaceEntry(false) }, enabled = canBrowse, modifier = Modifier.testTag("files_copy")) { Text("Copy") }
+                        OutlinedButton(onClick = { viewModel.copyWorkspaceEntry(true) }, enabled = canBrowse, modifier = Modifier.testTag("files_cut")) { Text("Cut") }
+                        OutlinedButton(onClick = { renameTarget = selected; newName = selected.name; nameDialog = "rename" }, enabled = canMutate && !state.dirty,
+                            modifier = Modifier.testTag("files_rename")) { Text("Rename") }
+                        OutlinedButton(onClick = { deleteTarget = selected }, enabled = canMutate && !state.dirty, modifier = Modifier.testTag("files_delete")) { Text("Delete") }
+                    }
+                }
+                state.operation?.let { operation ->
+                    Text("Operation ${operation.id}: ${operation.phase}", fontSize = 11.sp, modifier = Modifier.testTag("files_operation"))
+                    Text(if (operation.verified) "Outcome verified" else "Outcome unverified", fontSize = 11.sp)
+                    Text("${operation.source} → ${operation.destination}", fontSize = 10.sp)
+                    operation.lastError?.let { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
+                    operation.requests.forEach { request ->
+                        Text("${request.requestedAt}: ${request.method} · ${request.source} → ${request.destination}", fontSize = 10.sp)
+                    }
+                    operation.observations.forEach { observation ->
+                        Text("Observation ${observation.observedAt}: ${observation.text}", fontSize = 10.sp)
+                    }
+                    operation.resolution?.let { resolution ->
+                        Text("Manual resolution ${resolution.recordedAt}: ${resolution.note}", fontSize = 11.sp, modifier = Modifier.testTag("files_resolution"))
+                    }
+                    OutlinedButton(onClick = viewModel::inspectFilesOperation, enabled = !state.busy, modifier = Modifier.testTag("files_inspect_operation")) { Text("Inspect source and destination") }
+                    if (operation.requiresInspection) {
+                        Text("Unresolved · writes remain blocked until a manual resolution is recorded.", fontSize = 11.sp)
+                        OutlinedButton(onClick = { resolutionTarget = operation.id; resolutionNote = "" },
+                            enabled = !state.busy && operation.observations.isNotEmpty(), modifier = Modifier.testTag("files_resolve_operation")) {
+                            Text("Resolve after manual inspection")
+                        }
+                    }
+                }
+                if (state.operations.isNotEmpty()) {
+                    TextButton(onClick = { showFilesHistory = !showFilesHistory }, modifier = Modifier.testTag("files_operation_history")) {
+                        Text("${if (showFilesHistory) "Hide" else "Show"} operation history (${state.operations.size})")
+                    }
+                    if (showFilesHistory) state.operations.forEach { operation ->
+                        TextButton(onClick = { viewModel.selectFilesOperation(operation.id) }, enabled = !state.busy,
+                            modifier = Modifier.testTag("files_history_${operation.id}")) {
+                            Text("${operation.id} · ${if (operation.requiresInspection) "unresolved" else if (operation.verified) "verified" else "manual resolution"} · ${operation.phase}", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+            if (state.fileUri != null) {
+                OutlinedTextField(value = state.text, onValueChange = viewModel::editWorkspaceText, readOnly = state.busy,
+                    modifier = Modifier.fillMaxWidth().weight(1f).testTag("workspace_editor"),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+            } else {
+                Text("${state.entries.size} entries · hidden files included. Select an entry for actions.", fontSize = 11.sp)
+                LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("files_entries")) {
+                    items(state.entries, key = { it.uri }) { entry ->
+                        Row(Modifier.fillMaxWidth().testTag("files_entry_${entry.name}"), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = state.selected?.uri == entry.uri, onClick = { viewModel.selectWorkspaceEntry(entry) }, enabled = canBrowse,
+                                modifier = Modifier.testTag("files_select_${entry.name}"))
+                            Row(Modifier.weight(1f).clickable(enabled = canBrowse) {
+                                viewModel.openWorkspaceEntry(entry)
+                            }.padding(vertical = 12.dp).testTag("files_open_${entry.name}"), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.Description, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(entry.name, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    createKind?.let { kind ->
-        AlertDialog(onDismissRequest = { createKind = null }, title = { Text("New $kind on executor") },
-            text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true,
-                label = { Text("Name") }, modifier = Modifier.testTag("workspace_new_name")) },
-            confirmButton = { TextButton(onClick = { viewModel.createWorkspaceEntry(newName, kind == "folder"); createKind = null },
-                enabled = newName.isNotBlank()) { Text("Create") } },
-            dismissButton = { TextButton(onClick = { createKind = null }) { Text("Cancel") } })
+    nameDialog?.let { kind ->
+        AlertDialog(modifier = Modifier.imePadding(), onDismissRequest = { nameDialog = null }, title = { Text(if (kind == "rename") "Rename ${renameTarget?.name}" else "New $kind") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (kind == "rename") Text("Copies, verifies, then removes the original. An interrupted move can leave both entries.")
+                OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true, label = { Text("Name") }, modifier = Modifier.testTag("workspace_new_name"))
+            } },
+            confirmButton = { TextButton(onClick = {
+                if (kind == "rename") viewModel.renameWorkspaceEntry(newName, renameTarget)
+                else viewModel.createWorkspaceEntry(newName, kind == "folder")
+                nameDialog = null
+            }, enabled = newName.isNotEmpty(), modifier = Modifier.testTag("files_name_confirm")) { Text(if (kind == "rename") "Rename" else "Create") } },
+            dismissButton = { TextButton(onClick = { nameDialog = null }) { Text("Cancel") } })
+    }
+    deleteTarget?.let { target ->
+        AlertDialog(onDismissRequest = { deleteTarget = null }, title = { Text("Delete ${target.name}?") },
+            text = { Text("${viewModel.workspacePath(target.uri)}\nA selected folder and all of its contents will be removed.") },
+            confirmButton = { TextButton(onClick = { viewModel.deleteWorkspaceEntry(target); deleteTarget = null }, modifier = Modifier.testTag("files_delete_confirm")) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } })
+    }
+    discardAction?.let { action ->
+        AlertDialog(onDismissRequest = { discardAction = null }, title = { Text("Discard unsaved edits?") },
+            text = { Text("You can cancel and use Copy text to keep the current text.") },
+            confirmButton = { TextButton(onClick = {
+                val uri = state.fileUri
+                viewModel.closeWorkspaceFile()
+                if (action == "reload" && uri != null) viewModel.openWorkspaceFile(uri)
+                discardAction = null
+            }, modifier = Modifier.testTag("files_discard_confirm")) { Text("Discard") } },
+            dismissButton = { TextButton(onClick = { discardAction = null }) { Text("Cancel") } })
+    }
+    resolutionTarget?.let { id ->
+        AlertDialog(modifier = Modifier.imePadding(), onDismissRequest = { resolutionTarget = null },
+            title = { Text("Record manual resolution") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Operation $id. Describe what you inspected and how you resolved it. This records your decision and permits later writes; it does not mark the operation successful.")
+                OutlinedTextField(value = resolutionNote, onValueChange = { resolutionNote = it }, label = { Text("Resolution") },
+                    modifier = Modifier.testTag("files_resolution_note"))
+            } },
+            confirmButton = { TextButton(onClick = {
+                viewModel.resolveFilesOperation(id, resolutionNote)
+                resolutionTarget = null
+            }, enabled = resolutionNote.isNotBlank(), modifier = Modifier.testTag("files_resolution_confirm")) { Text("Record resolution") } },
+            dismissButton = { TextButton(onClick = { resolutionTarget = null }) { Text("Cancel") } })
     }
 }
 
