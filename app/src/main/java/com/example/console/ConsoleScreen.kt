@@ -49,56 +49,61 @@ fun ConsoleScreen(model: ConsoleViewModel = viewModel()) {
     LaunchedEffect(model, lifecycle, state.endpoint, state.initialized) {
         if (state.initialized) lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { model.observe() }
     }
-    Column(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.testTag("console_root")) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    if (context.checkSelfPermission(TermuxLauncher.PERMISSION_RUN_COMMAND) == android.content.pm.PackageManager.PERMISSION_GRANTED)
-                        model.startConsole(context)
-                    else permission.launch(TermuxLauncher.PERMISSION_RUN_COMMAND)
-                },
-                enabled = state.busy == null && state.initialized,
-                modifier = Modifier.testTag("console_start")
-            ) { Text("Start Console") }
-            OutlinedButton(onClick = model::refresh, enabled = state.initialized, modifier = Modifier.testTag("console_refresh")) {
-                Text("Refresh")
-            }
-        }
-        Text(
-            "${state.endpoint} · ${if (state.ready) "HTTP ready" else "Readiness unverified"}",
-            Modifier.padding(horizontal = 12.dp).testTag("console_readiness"), style = MaterialTheme.typography.labelSmall
-        )
-        Text(state.bootstrap, Modifier.padding(horizontal = 12.dp).testTag("console_bootstrap"), style = MaterialTheme.typography.labelSmall)
-        state.busy?.let {
-            LinearProgressIndicator(Modifier.fillMaxWidth().testTag("console_busy"))
-            Text(it, Modifier.padding(horizontal = 12.dp))
-        }
-        if (state.errors.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().heightIn(max = 120.dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).testTag("console_errors")) {
-                state.errors.forEach { (source, message) ->
-                    Text("$source: $message", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    BoxWithConstraints(Modifier.fillMaxSize().imePadding().semantics { testTagsAsResourceId = true }.testTag("console_root")) {
+        val statusMaxHeight = maxHeight / 3
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxWidth().heightIn(max = statusMaxHeight).verticalScroll(rememberScrollState())) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            if (context.checkSelfPermission(TermuxLauncher.PERMISSION_RUN_COMMAND) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                                model.startConsole(context)
+                            else permission.launch(TermuxLauncher.PERMISSION_RUN_COMMAND)
+                        },
+                        enabled = state.busy == null && state.initialized,
+                        modifier = Modifier.testTag("console_start")
+                    ) { Text("Start Console") }
+                    OutlinedButton(onClick = model::refresh, enabled = state.initialized, modifier = Modifier.testTag("console_refresh")) {
+                        Text("Refresh")
+                    }
+                }
+                Text(
+                    "${state.endpoint} · ${if (state.ready) "HTTP ready" else "Readiness unverified"}",
+                    Modifier.padding(horizontal = 12.dp).testTag("console_readiness"), style = MaterialTheme.typography.labelSmall
+                )
+                Text(state.bootstrap, Modifier.padding(horizontal = 12.dp).testTag("console_bootstrap"), style = MaterialTheme.typography.labelSmall)
+                state.busy?.let {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().testTag("console_busy"))
+                    Text(it, Modifier.padding(horizontal = 12.dp))
+                }
+                if (state.errors.isNotEmpty()) {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 120.dp).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).testTag("console_errors")) {
+                        state.errors.forEach { (source, message) ->
+                            Text("$source: $message", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
-        }
-        ScrollableTabRow(selectedTabIndex = section, edgePadding = 0.dp) {
-            sections.forEachIndexed { index, label ->
-                Tab(
-                    selected = section == index, onClick = { section = index },
-                    text = { Text(label) }, modifier = Modifier.testTag("console_section_${label.lowercase()}")
-                )
+            ScrollableTabRow(selectedTabIndex = section, edgePadding = 0.dp) {
+                sections.forEachIndexed { index, label ->
+                    Tab(
+                        selected = section == index, onClick = { section = index },
+                        text = { Text(label) }, modifier = Modifier.testTag("console_section_${label.lowercase()}")
+                    )
+                }
             }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            when (section) {
-                0 -> Overview(state, model)
-                1 -> Team(state, model)
-                2 -> Assign(state, model)
-                3 -> Results(state, model)
-                4 -> Ledger(state)
-                5 -> Connections(state, model)
-                6 -> Events(state, model)
-                7 -> VoiceConsole()
-                8 -> ConsoleSettings(state, model)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when (section) {
+                    0 -> Overview(state, model)
+                    1 -> Team(state, model)
+                    2 -> Assign(state, model)
+                    3 -> Results(state, model)
+                    4 -> Ledger(state)
+                    5 -> Connections(state, model)
+                    6 -> Events(state, model)
+                    7 -> VoiceConsole()
+                    8 -> ConsoleSettings(state, model)
+                }
             }
         }
     }

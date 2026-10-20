@@ -122,6 +122,7 @@ fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
         ) {
             if (selectedTab > 0) {
                 // Connection & Endpoint Control Bar
