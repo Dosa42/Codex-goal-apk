@@ -632,6 +632,23 @@ class CodexWebSocketClient(
         }
     }
 
+    /** Execute filesystem operations in the executor's filesystem identity.
+     * Mutations are never replayed after a timeout or connection turnover.
+     */
+    suspend fun fileSystemRequest(method: String, params: JSONObject, expectedGeneration: Long = socketGeneration): JSONObject {
+        require(method.startsWith("fs/")) { "Expected an fs/ protocol method" }
+        val generation = expectedGeneration
+        ensureInitialized(generation)
+        val socket = webSocket ?: throw IOException("WebSocket is not connected")
+        val response = sendRpcRequestInternal(method, params, socket, generation)
+        ensureInitialized(generation)
+        response.optJSONObject("error")?.let { error ->
+            throw IOException("$method: " + error.optString("message", error.toString()))
+        }
+        return response.optJSONObject("result")
+            ?: throw IOException("$method response missing result")
+    }
+
     // Low-level RPC sending bound to captured socket & generation
 
     private suspend fun sendRpcRequestInternal(

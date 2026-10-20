@@ -17,6 +17,8 @@ import com.example.service.TermuxLauncher
 import com.example.transport.CodexWebSocketClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -31,11 +33,228 @@ data class AcceptanceCheckStep(
 
 enum class StepStatus { PENDING, RUNNING, PASSED, FAILED }
 
+data class WorkspaceEntry(val name: String, val uri: String, val directory: Boolean, val file: Boolean)
+
+data class WorkspaceState(
+    val workingUri: String = "file:///data/data/com.termux/files/home/.codex",
+    val directoryUri: String = "file:///data/data/com.termux/files/home/.codex",
+    val configUri: String = "",
+    val entries: List<WorkspaceEntry> = emptyList(),
+    val fileUri: String? = null,
+    val fileSessionId: String? = null,
+    val text: String = "",
+    val originalBase64: String? = null,
+    val dirty: Boolean = false,
+    val busy: Boolean = false,
+    val loaded: Boolean = false,
+    val status: String = "Connect to load the Termux workspace",
+    val error: String? = null
+)
+
 class MainViewModel(
     private val repository: ExecRepository
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
+
+    private val workspaceMutex = Mutex()
+    private var operationClient: CodexWebSocketClient? = null
+    private var operationGeneration: Long = -1
+    private val _workspace = MutableStateFlow(WorkspaceState())
+    val workspace: StateFlow<WorkspaceState> = _workspace.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            ExecServerService.activeClientFlow.flatMapLatest { client ->
+                client?.connectionState ?: flowOf(ConnectionState.DISCONNECTED)
+            }.collect { state ->
+                if (state == ConnectionState.INITIALIZED) loadWorkspace()
+                else _workspace.update { it.copy(loaded = false, status = "Workspace connection: $state") }
+            }
+        }
+    }
+
+    private fun workspaceClient(): CodexWebSocketClient = ExecServerService.activeClient
+        ?.takeIf { it.connectionState.value == ConnectionState.INITIALIZED }
+        ?: throw IOException("Executor is not initialized")
+
+    private suspend fun CodexWebSocketClient.workspaceRpc(method: String, params: org.json.JSONObject): org.json.JSONObject {
+        check(this === operationClient && this === ExecServerService.activeClient) {
+            "Executor changed during operation; reload before retrying"
+        }
+        return fileSystemRequest(method, params, operationGeneration)
+    }
+
+    private fun childUri(parent: String, name: String): String =
+        android.net.Uri.parse(parent.trimEnd('/')).buildUpon().appendPath(name).build().toString()
+
+    fun workspacePath(uri: String): String = android.net.Uri.parse(uri).path ?: uri
+
+    private fun pathUri(value: String): String {
+        val input = value.trim()
+        require(input.startsWith('/') || input.startsWith("file://")) { "Enter an absolute executor path or file URI" }
+        val uri = if (input.startsWith("file://")) android.net.Uri.parse(input)
+            else android.net.Uri.fromFile(java.io.File(input))
+        require(uri.scheme == "file" && uri.host.isNullOrEmpty() && uri.path?.startsWith('/') == true) {
+            "Enter an absolute executor path or file URI"
+        }
+        return uri.toString()
+    }
+
+    private fun workspaceAction(action: suspend () -> Unit) {
+        viewModelScope.launch {
+            workspaceMutex.withLock {
+                _workspace.update { it.copy(busy = true, error = null) }
+                try {
+                    operationClient = workspaceClient()
+                    operationGeneration = operationClient!!.socketGeneration
+                    action()
+                }
+                catch (e: TimeoutCancellationException) { _workspace.update { it.copy(error = "Filesystem request timed out. A write may have reached Termux; reload to inspect its result.") } }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { _workspace.update { it.copy(error = e.message ?: e.javaClass.name) } }
+                finally {
+                    operationClient = null
+                    operationGeneration = -1
+                    _workspace.update { it.copy(busy = false) }
+                    if (currentCoroutineContext().isActive) {
+                        val state = _workspace.value
+                        val client = ExecServerService.activeClient
+                        repository.putSetting("lastWorkspaceSnapshot", org.json.JSONObject().apply {
+                            put("timestamp", System.currentTimeMillis())
+                            put("sessionId", client?.currentSessionId?.value ?: org.json.JSONObject.NULL)
+                            put("socketGeneration", client?.socketGeneration ?: -1)
+                            put("loaded", state.loaded); put("workingUri", state.workingUri)
+                            put("directoryUri", state.directoryUri); put("configUri", state.configUri)
+                            put("fileUri", state.fileUri ?: org.json.JSONObject.NULL)
+                            put("dirty", state.dirty); put("status", state.status)
+                            put("error", state.error ?: org.json.JSONObject.NULL)
+                            put("entryCount", state.entries.size)
+                        }.toString())
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun listWorkspace(client: CodexWebSocketClient, uri: String): List<WorkspaceEntry> {
+        val response = client.workspaceRpc("fs/readDirectory", org.json.JSONObject().put("path", uri))
+        val array = response.getJSONArray("entries")
+        return (0 until array.length()).map { index ->
+            val entry = array.getJSONObject(index)
+            val name = entry.getString("fileName")
+            WorkspaceEntry(name, childUri(uri, name), entry.getBoolean("isDirectory"), entry.getBoolean("isFile"))
+        }.sortedWith(compareByDescending<WorkspaceEntry> { it.directory }.thenBy { it.name.lowercase() })
+    }
+
+    fun loadWorkspace() = workspaceAction {
+        val client = workspaceClient()
+        val generation = client.socketGeneration
+        val home = client.observedEnvironment.value?.userHomeDir ?: throw IOException("Executor did not report its home")
+        val codex = childUri(home, ".codex")
+        val settingsDir = childUri(codex, "android-client")
+        val configUri = childUri(settingsDir, "workspace.json")
+        var working = codex
+        var status = "Default working folder; no workspace setting saved yet"
+        var foundConfig = false
+        client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", codex).put("recursive", true))
+        if (listWorkspace(client, codex).any { it.name == "android-client" && it.directory }) {
+            if (listWorkspace(client, settingsDir).any { it.name == "workspace.json" && it.file }) {
+                val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri))
+                val config = org.json.JSONObject(String(Base64.decode(response.getString("dataBase64"), Base64.NO_WRAP), Charsets.UTF_8))
+                check(config.getInt("formatVersion") == 1) { "Unsupported workspace setting format" }
+                working = pathUri(config.getString("workspaceUri"))
+                status = "Working folder loaded from Termux"
+                foundConfig = true
+            }
+        }
+        val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", working)).getString("path")
+        val entries = listWorkspace(client, canonical)
+        if (!foundConfig) {
+            client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", settingsDir).put("recursive", true))
+            val config = org.json.JSONObject().put("formatVersion", 1).put("workspaceUri", canonical).toString(2) + "\n"
+            val encoded = Base64.encodeToString(config.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", configUri).put("dataBase64", encoded))
+            check(client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", configUri)).getString("dataBase64") == encoded) {
+                "Default workspace setting readback differs; reload"
+            }
+            status = "Default workspace setting created and read back in Termux"
+        }
+        check(client.socketGeneration == generation) { "Connection changed while loading workspace; reload" }
+        _workspace.update { it.copy(workingUri = canonical, directoryUri = canonical, configUri = configUri,
+            entries = entries, loaded = true, status = status) }
+    }
+
+    fun browseWorkspace(path: String) = workspaceAction {
+        check(!_workspace.value.dirty) { "Save the open file or close it before changing folders" }
+        val client = workspaceClient()
+        val canonical = client.workspaceRpc("fs/canonicalize", org.json.JSONObject().put("path", pathUri(path))).getString("path")
+        val entries = listWorkspace(client, canonical)
+        _workspace.update { it.copy(directoryUri = canonical, entries = entries, fileUri = null, fileSessionId = null,
+            text = "", originalBase64 = null, dirty = false, status = "Folder read from Termux") }
+    }
+
+    fun workspaceUp() {
+        val parent = java.io.File(workspacePath(_workspace.value.directoryUri)).parent ?: "/"
+        browseWorkspace(parent)
+    }
+
+    fun useWorkspaceDirectory() = workspaceAction {
+        val client = workspaceClient()
+        val state = _workspace.value
+        check(state.loaded && state.configUri.isNotEmpty()) { "Load the workspace first" }
+        val parent = state.configUri.substringBeforeLast('/')
+        client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", parent).put("recursive", true))
+        val text = org.json.JSONObject().put("formatVersion", 1).put("workspaceUri", state.directoryUri).toString(2) + "\n"
+        val encoded = Base64.encodeToString(text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", state.configUri).put("dataBase64", encoded))
+        val readback = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", state.configUri)).getString("dataBase64")
+        check(readback == encoded) { "Workspace setting readback differs; reload before retrying" }
+        _workspace.update { it.copy(workingUri = state.directoryUri, status = "Working folder saved and read back in Termux") }
+    }
+
+    fun openWorkspaceFile(uri: String) = workspaceAction {
+        val client = workspaceClient()
+        val response = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri)))
+        val encoded = response.getString("dataBase64")
+        val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+        val text = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+        _workspace.update { it.copy(fileUri = uri, fileSessionId = client.currentSessionId.value,
+            text = text, originalBase64 = encoded, dirty = false, status = "UTF-8 file read from Termux") }
+    }
+
+    fun editWorkspaceText(text: String) { _workspace.update { it.copy(text = text, dirty = true) } }
+
+    fun closeWorkspaceFile() { _workspace.update { it.copy(fileUri = null, fileSessionId = null, text = "", originalBase64 = null, dirty = false) } }
+
+    fun createWorkspaceEntry(name: String, directory: Boolean) = workspaceAction {
+        require(name.isNotBlank() && name !in listOf(".", "..") && '/' !in name && '\u0000' !in name) { "Enter one file or folder name" }
+        val client = workspaceClient()
+        val state = _workspace.value
+        check(state.loaded) { "Load the workspace first" }
+        check(listWorkspace(client, state.directoryUri).none { it.name == name }) { "An entry with that name already exists" }
+        val uri = childUri(state.directoryUri, name)
+        if (directory) client.workspaceRpc("fs/createDirectory", org.json.JSONObject().put("path", uri).put("recursive", false))
+        else client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", uri).put("dataBase64", ""))
+        val entries = listWorkspace(client, state.directoryUri)
+        _workspace.update { it.copy(entries = entries, status = "Created in Termux: $name") }
+    }
+
+    fun saveWorkspaceFile() = workspaceAction {
+        val client = workspaceClient()
+        val state = _workspace.value
+        val uri = state.fileUri ?: throw IOException("No file selected")
+        check(state.fileSessionId != null && state.fileSessionId == client.currentSessionId.value) {
+            "Executor session changed since opening this file; copy pending edits and reload the file before saving"
+        }
+        val current = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri))).getString("dataBase64")
+        check(current == state.originalBase64) { "File changed in Termux since opening; reload before saving" }
+        val encoded = Base64.encodeToString(state.text.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        client.workspaceRpc("fs/writeFile", org.json.JSONObject().put("path", pathUri(uri)).put("dataBase64", encoded))
+        val readback = client.workspaceRpc("fs/readFile", org.json.JSONObject().put("path", pathUri(uri))).getString("dataBase64")
+        check(readback == encoded) { "File readback differs; inspect the file before retrying" }
+        _workspace.update { it.copy(originalBase64 = encoded, dirty = false, status = "Saved and read back from Termux") }
+    }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
@@ -164,7 +383,8 @@ class MainViewModel(
             if (client == null || client.connectionState.value != ConnectionState.INITIALIZED) {
                 return@launch
             }
-            val defaultCwd = cwd ?: "file:///data/data/com.termux/files/home"
+            val defaultCwd = cwd ?: _workspace.value.takeIf { it.loaded }?.workingUri
+                ?: run { _lastWriteStatus.value = "Error: Load the Termux workspace first"; return@launch }
             val env = mapOf(
                 "HOME" to "/data/data/com.termux/files/home",
                 "PREFIX" to "/data/data/com.termux/files/usr",
@@ -190,7 +410,8 @@ class MainViewModel(
             if (client == null || client.connectionState.value != ConnectionState.INITIALIZED) {
                 return@launch
             }
-            val defaultCwd = cwd ?: "file:///data/data/com.termux/files/home"
+            val defaultCwd = cwd ?: _workspace.value.takeIf { it.loaded }?.workingUri
+                ?: run { _lastWriteStatus.value = "Error: Load the Termux workspace first"; return@launch }
             val env = mapOf(
                 "HOME" to "/data/data/com.termux/files/home",
                 "PREFIX" to "/data/data/com.termux/files/usr",

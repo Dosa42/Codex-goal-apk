@@ -190,6 +190,7 @@ class ExecServerService : Service() {
                     state.put("connectionDesired", repository.isConnectionDesired())
                     val report = repository.getSetting("lastAcceptanceReport")
                     state.put("lastAcceptanceReport", report?.let { JSONObject(it) } ?: JSONObject.NULL)
+                    state.put("workspaceSnapshot", repository.getSetting("lastWorkspaceSnapshot")?.let { JSONObject(it) } ?: JSONObject.NULL)
                     val processes = JSONArray()
                     for (p in repository.getAllProcesses()) {
                         processes.put(JSONObject().apply {

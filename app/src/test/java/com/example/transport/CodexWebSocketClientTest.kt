@@ -112,6 +112,90 @@ class CodexWebSocketClientTest {
     }
 
     @Test
+    fun testFilesystemWireBytesAndExplicitErrors() = runBlocking {
+        val received = LinkedBlockingQueue<JSONObject>()
+        val stored = java.util.concurrent.ConcurrentHashMap<String, String>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val request = JSONObject(text)
+                val method = request.optString("method")
+                if (!request.has("id")) return
+                val response = JSONObject().put("id", request.getLong("id"))
+                if (method == "initialize") {
+                    response.put("result", JSONObject().put("sessionId", "filesystem-session"))
+                } else {
+                    received.add(request)
+                    val params = request.getJSONObject("params")
+                    when (method) {
+                        "fs/writeFile" -> {
+                            stored[params.getString("path")] = params.getString("dataBase64")
+                            response.put("result", JSONObject())
+                        }
+                        "fs/readFile" -> {
+                            val value = stored[params.getString("path")]
+                            if (value == null) response.put("error", JSONObject().put("code", -32000).put("message", "File absent"))
+                            else response.put("result", JSONObject().put("dataBase64", value))
+                        }
+                    }
+                }
+                webSocket.send(response.toString())
+            }
+        }))
+        client.start(server.url("/").toString().replace("http://", "ws://"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        val uri = "file:///data/data/com.termux/files/home/.codex/a%20b-%C3%BC.txt"
+        val bytes = "APK ⇄ Termux\n\u0000 exact bytes".toByteArray(Charsets.UTF_8)
+        val encoded = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        client.fileSystemRequest("fs/writeFile", JSONObject().put("path", uri).put("dataBase64", encoded))
+        val read = client.fileSystemRequest("fs/readFile", JSONObject().put("path", uri))
+        assertArrayEquals(bytes, android.util.Base64.decode(read.getString("dataBase64"), android.util.Base64.NO_WRAP))
+        assertEquals(uri, received.poll(2, TimeUnit.SECONDS)!!.getJSONObject("params").getString("path"))
+        assertEquals("fs/readFile", received.poll(2, TimeUnit.SECONDS)!!.getString("method"))
+        try {
+            client.fileSystemRequest("fs/readFile", JSONObject().put("path", uri + ".missing"))
+            fail("Missing file must be reported")
+        } catch (e: java.io.IOException) { assertTrue(e.message!!.contains("File absent")) }
+        assertEquals(0, client.pendingRpcCount)
+        assertTrue(repository.getAllProcesses().isEmpty())
+    }
+
+    @Test
+    fun testFilesystemMutationTimeoutIsNotReplayed() = runBlocking {
+        client.stop()
+        client = CodexWebSocketClient(repository, scope, rpcTimeoutMs = 250, retryBaseMs = 20)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        val listener = object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val message = JSONObject(text)
+                when (message.optString("method")) {
+                    "initialize" -> webSocket.send(JSONObject().put("id", message.getLong("id"))
+                        .put("result", JSONObject().put("sessionId", "fs-timeout-session")).toString())
+                    "fs/writeFile" -> writes.incrementAndGet() // accepted frame, deliberately no reply
+                }
+            }
+        }
+        repeat(2) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+        val endpoint = server.url("/").toString().replace("http://", "ws://")
+        client.start(endpoint)
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        try {
+            client.fileSystemRequest("fs/writeFile", JSONObject().put("path", "file:///tmp/owned").put("dataBase64", "eA=="))
+            fail("A missing mutation reply must remain uncertain")
+        } catch (_: TimeoutCancellationException) { }
+        assertEquals(0, client.pendingRpcCount)
+        val oldGeneration = client.socketGeneration
+        client.start(endpoint, isReconnect = true)
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        try {
+            client.fileSystemRequest("fs/writeFile", JSONObject().put("path", "file:///tmp/owned").put("dataBase64", "eA=="), oldGeneration)
+            fail("An operation from the old generation must not write after reconnect")
+        } catch (e: java.io.IOException) { assertTrue(e.message!!.contains("generation")) }
+        delay(100)
+        assertEquals(1, writes.get())
+        assertEquals(0, client.pendingRpcCount)
+    }
+
+    @Test
     fun testUnknownSessionRpcErrorTransitionsToSessionLost() = runBlocking {
         // Pre-populate old session
         repository.saveSession(InitializeResult("unknown-expired-session-999"), server.url("/").toString().replace("http://", "ws://"))

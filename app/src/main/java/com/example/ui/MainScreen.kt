@@ -26,6 +26,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -236,6 +238,13 @@ fun MainScreen(
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     modifier = Modifier.testTag("tab_permissions")
                 )
+                Tab(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
+                    text = { Text("Workspace") },
+                    icon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                    modifier = Modifier.testTag("tab_workspace")
+                )
             }
 
             // Tab Content
@@ -246,6 +255,7 @@ fun MainScreen(
                     2 -> ProtocolLogTab(viewModel)
                     3 -> DiagnosticsTab(viewModel, onRequestTermuxPermission)
                     4 -> PermissionsTab()
+                    5 -> WorkspaceTab(viewModel)
                 }
             }
         }
@@ -704,8 +714,9 @@ fun RawStreamLogView(chunks: List<OutputChunkEntity>) {
 
 @Composable
 fun RunCommandTab(viewModel: MainViewModel) {
-    var command by remember { mutableStateOf("ls -la /data/data/com.termux/files/home") }
-    var cwd by remember { mutableStateOf("file:///data/data/com.termux/files/home") }
+    val workspace by viewModel.workspace.collectAsState()
+    var command by remember { mutableStateOf("pwd && ls -la") }
+    var cwd by remember(workspace.workingUri) { mutableStateOf(workspace.workingUri) }
 
     Column(
         modifier = Modifier
@@ -763,6 +774,69 @@ fun RunCommandTab(viewModel: MainViewModel) {
             Spacer(Modifier.width(8.dp))
             Text("Execute Command")
         }
+    }
+}
+
+@Composable
+fun WorkspaceTab(viewModel: MainViewModel) {
+    val state by viewModel.workspace.collectAsState()
+    var path by remember(state.directoryUri) { mutableStateOf(viewModel.workspacePath(state.directoryUri)) }
+    var createKind by remember { mutableStateOf<String?>(null) }
+    var newName by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Termux Workspace", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text("Working folder: ${viewModel.workspacePath(state.workingUri)}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+        Text(state.status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+        if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        OutlinedTextField(value = path, onValueChange = { path = it }, singleLine = true,
+            label = { Text("Executor folder") }, modifier = Modifier.fillMaxWidth().testTag("workspace_path"),
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = { viewModel.browseWorkspace(path) }, enabled = !state.busy && state.loaded) { Text("Open folder") }
+            OutlinedButton(onClick = { viewModel.workspaceUp() }, enabled = !state.busy && state.loaded) { Text("Up") }
+            OutlinedButton(onClick = { viewModel.loadWorkspace() }, enabled = !state.busy) { Text("Reload workspace") }
+            Button(onClick = { viewModel.useWorkspaceDirectory() }, enabled = !state.busy && state.loaded,
+                modifier = Modifier.testTag("workspace_use_folder")) { Text("Use as working folder") }
+            OutlinedButton(onClick = { newName = ""; createKind = "file" }, enabled = !state.busy && state.loaded) { Text("New file") }
+            OutlinedButton(onClick = { newName = ""; createKind = "folder" }, enabled = !state.busy && state.loaded) { Text("New folder") }
+        }
+        if (state.configUri.isNotBlank()) Text("Setting: ${viewModel.workspacePath(state.configUri)}", fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+        if (state.fileUri != null) {
+            Text(viewModel.workspacePath(state.fileUri!!) + if (state.dirty) "  • unsaved" else "", fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { viewModel.saveWorkspaceFile() }, enabled = !state.busy && state.dirty,
+                    modifier = Modifier.testTag("workspace_save_file")) { Text("Save to Termux") }
+                OutlinedButton(onClick = { viewModel.openWorkspaceFile(state.fileUri!!) }, enabled = !state.busy) { Text("Reload file") }
+                TextButton(onClick = { viewModel.closeWorkspaceFile() }, enabled = !state.busy) { Text(if (state.dirty) "Close / discard edits" else "Close file") }
+            }
+            OutlinedTextField(value = state.text, onValueChange = { viewModel.editWorkspaceText(it) },
+                readOnly = state.busy, modifier = Modifier.fillMaxWidth().weight(1f).testTag("workspace_editor"),
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                items(state.entries, key = { it.uri }) { entry ->
+                    Row(Modifier.fillMaxWidth().clickable(enabled = !state.busy) {
+                        if (entry.directory) viewModel.browseWorkspace(entry.uri) else viewModel.openWorkspaceFile(entry.uri)
+                    }.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.Description, contentDescription = null,
+                            modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(entry.name, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+    }
+    createKind?.let { kind ->
+        AlertDialog(onDismissRequest = { createKind = null }, title = { Text("New $kind in Termux") },
+            text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true,
+                label = { Text("Name") }, modifier = Modifier.testTag("workspace_new_name")) },
+            confirmButton = { TextButton(onClick = { viewModel.createWorkspaceEntry(newName, kind == "folder"); createKind = null },
+                enabled = newName.isNotBlank()) { Text("Create") } },
+            dismissButton = { TextButton(onClick = { createKind = null }) { Text("Cancel") } })
     }
 }
 
