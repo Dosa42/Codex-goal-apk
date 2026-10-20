@@ -351,7 +351,7 @@ class MainViewModel(
                     val write = client.writeProcess(ptyId, "INPUT_$marker\n".toByteArray(Charsets.UTF_8))
                     check(write is com.example.transport.WriteStatus.Accepted) { "PTY write not accepted: $write" }
                     drainUntilExit(ptyId)
-                    val ptyOut = output(ptyId, "stdout") + output(ptyId, "stderr")
+                    val ptyOut = output(ptyId, "pty") + output(ptyId, "stdout") + output(ptyId, "stderr")
                     check(ptyOut.contains("PTY_REPLY:INPUT_$marker")) { "Actual PTY response missing" }
                     check(ptyOut.contains("UID:$uid") && repository.getProcess(ptyId)?.exitCode == 7) { "PTY UID or exit mismatch" }
                     step(4, StepStatus.PASSED, "Exact input/reply, UID=$uid, exit=7")

@@ -1,13 +1,13 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="xterm.css">
-<style>html,body,#terminal-container{margin:0;width:100%;height:100%;background:#0d1117;overflow:hidden}</style>
+<style>html,body{margin:0;width:100vw;height:100vh;background:#0d1117;overflow:hidden}#terminal-container{position:fixed;inset:0;background:#0d1117;overflow:auto}</style>
 </head><body><div id="terminal-container"></div>
 <script>window.onerror=function(message){window.AndroidBridge?.onError(String(message));};</script>
 <script src="xterm.js"></script><script>
 /* Renderer cursor advances only after xterm consumes bytes. */
 (() => {
-  const term = new Terminal({cursorBlink:true, fontSize:13, cols:80, rows:24,
+  const term = new Terminal({cursorBlink:true, convertEol:true, fontSize:13, cols:80, rows:24,
     fontFamily:"monospace", theme:{background:"#0d1117",foreground:"#c9d1d9"}});
   term.open(document.getElementById("terminal-container"));
   let context = null, next = 1, busy = false, revision = 0;
