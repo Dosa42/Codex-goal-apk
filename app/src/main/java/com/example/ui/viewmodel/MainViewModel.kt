@@ -581,6 +581,8 @@ class MainViewModel(
                         put("endpoint", client?.currentEndpoint ?: org.json.JSONObject.NULL)
                         put("executorOs", client?.observedEnvironment?.value?.platformOs ?: org.json.JSONObject.NULL)
                         put("executorShell", client?.observedEnvironment?.value?.shell?.path ?: org.json.JSONObject.NULL)
+                        put("environmentProfile", try { ExecutorEnvironment.from(client?.observedEnvironment?.value).environmentProfile }
+                            catch (_: Exception) { org.json.JSONObject.NULL })
                         put("ownedProcessIds", org.json.JSONArray(owned))
                         put("cleanupErrors", org.json.JSONArray(cleanupErrors))
                         put("steps", org.json.JSONArray().apply {
@@ -607,6 +609,7 @@ class MainViewModel(
         sb.appendLine("SessionId: ${ExecServerService.activeClient?.currentSessionId?.value ?: "None"}")
         val env = observedEnvironment.value
         sb.appendLine("Environment: cwd=${env?.cwd}, shell=${env?.shell?.path}, os=${env?.platformOs}, version=${env?.executorVersion}")
+        sb.appendLine("Environment profile: " + try { ExecutorEnvironment.from(env).environmentProfile } catch (_: Exception) { "Unavailable" })
         sb.appendLine("\n--- Acceptance Check Results ---")
         val steps = acceptanceSteps.value
         if (steps.isEmpty()) {

@@ -17,6 +17,7 @@ class ExecutorEnvironmentTest {
         assertEquals("file:///home/z/my-project", executor.defaultWorkingUri)
         assertTrue(executor.configUri.startsWith("file:///home/z/.local/state/codex-goal/workspaces/"))
         assertFalse(executor.termux)
+        assertEquals("executor-inherited", executor.environmentProfile)
         assertTrue(executor.environment(false).isEmpty())
         assertEquals(mapOf("TERM" to "xterm-256color"), executor.environment(true))
     }
@@ -28,7 +29,10 @@ class ExecutorEnvironmentTest {
         assertEquals("/bin/sh", executor.shellPath)
         assertEquals("file:///data/data/com.termux/files/home/.codex", executor.defaultWorkingUri)
         assertEquals("file:///data/data/com.termux/files/home/.codex/android-client/workspace.json", executor.configUri)
-        assertTrue(executor.environment(false).isEmpty())
+        assertEquals("native-termux-configured", executor.environmentProfile)
+        assertEquals(mapOf("HOME" to "/data/data/com.termux/files/home", "PREFIX" to "/data/data/com.termux/files/usr",
+            "PATH" to "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"), executor.environment(false))
+        assertEquals("xterm-256color", executor.environment(true)["TERM"])
     }
 
     @Test fun workspaceScopesRemainStableAndDifferentRootsDoNotShareSettings() {

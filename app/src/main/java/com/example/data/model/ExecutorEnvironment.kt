@@ -18,9 +18,21 @@ data class ExecutorEnvironment(
     fun commandArgv(command: String): List<String> = listOf(shellPath, "-c", command)
     fun interactiveArgv(): List<String> = listOf(shellPath, "-l")
 
-    // The executor already owns HOME/PATH/PREFIX. Only terminal presentation is
-    // requested here; copying Android paths into a Linux environment breaks it.
-    fun environment(tty: Boolean): Map<String, String> = if (tty) mapOf("TERM" to "xterm-256color") else emptyMap()
+    val environmentProfile: String get() = if (termux) "native-termux-configured" else "executor-inherited"
+
+    fun environment(tty: Boolean): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        if (termux) {
+            // Observed native33995 inherits Android's PATH and empty HOME/PREFIX.
+            // Retain the explicit existing Termux profile only for its exact identity.
+            val home = URI(homeUri).path.trimEnd('/')
+            val prefix = home.removeSuffix("/home") + "/usr"
+            result.putAll(mapOf("HOME" to home, "PREFIX" to prefix,
+                "PATH" to "$home/.local/bin:$prefix/bin:/system/bin"))
+        }
+        if (tty) result["TERM"] = "xterm-256color"
+        return result
+    }
 
     companion object {
         fun fileUri(input: String): String {

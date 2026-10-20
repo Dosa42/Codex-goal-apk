@@ -4,7 +4,7 @@ The APK remains an Android client. Shell, filesystem, working directory and user
 
 ## Selection
 
-`initialize.environmentInfo` must report `shell.path`, `userHomeDir`, `cwd` and `platformOs`. Missing metadata is a visible error. Commands use the exact reported shell (`-c`); interactive terminals use that shell (`-l`). There is no server-side executable rewrite or silent Android shell fallback. Processes inherit the executor environment through explicit `env: {}`; PTYs additionally request `TERM=xterm-256color`. The APK does not inject Android HOME, PREFIX or PATH into Linux.
+`initialize.environmentInfo` must report `shell.path`, `userHomeDir`, `cwd` and `platformOs`. Missing metadata is a visible error. Commands use the exact reported shell (`-c`); interactive terminals use that shell (`-l`). There is no server-side executable rewrite or silent Android shell fallback. Linux processes inherit their executor environment through explicit `env: {}`; PTYs additionally request `TERM=xterm-256color`. The APK does not inject Android HOME, PREFIX or PATH into Linux. The exact native Android/Termux profile retains the established explicit HOME, PREFIX and Termux PATH: an actual native33995 probe found inherited Android PATH without codex/python3 and empty HOME/PREFIX, while the configured profile resolved both tools. Diagnostics identify `native-termux-configured` or `executor-inherited`; shell selection still uses the advertised path.
 
 The installed native executor advertises `/bin/sh`. A direct protocol execution verified that this exact path works and runs as the Termux UID; its name must not be judged by the APK's filesystem.
 
