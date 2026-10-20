@@ -526,7 +526,8 @@ class MainViewModel(
                     while (true) {
                         val cursor = repository.getProcess(id)?.lastConsumedSeq
                         val read = client!!.readProcessCatchup(id, cursor)
-                        if ((read.exited || read.closed) && read.chunks.isEmpty()) break
+                        // Exit may precede the final PTY bytes. Closed confirms drain.
+                        if (read.closed && read.chunks.isEmpty()) break
                         delay(50)
                     }
                 }

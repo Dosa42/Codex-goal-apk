@@ -527,8 +527,8 @@ class CodexWebSocketClient(
         // Clear uncertainty now that read has contacted server
         repository.setProcessDeliveryUncertain(processId, false)
 
-        // Deduplicate chunks transactionally with contiguous cursor computation
-        repository.recordChunksBatch(processId, chunkList)
+        // A read page certifies output coverage across intervening lifecycle events.
+        repository.recordReadPage(processId, afterSeq, chunkList)
         ensureInitialized(gen)
         val metadata = JSONObject(resultObj.toString()).apply { remove("chunks") }
         repository.putSetting("processResult:$processId", metadata.toString())
@@ -539,7 +539,7 @@ class CodexWebSocketClient(
         if (closed) {
             repository.setProcessClosed(processId)
         }
-        repository.setOutputComplete(processId, (exited || closed) && chunkList.isEmpty())
+        repository.setOutputComplete(processId, closed && chunkList.isEmpty())
 
         return ProcessReadResult(
             chunks = chunkList,

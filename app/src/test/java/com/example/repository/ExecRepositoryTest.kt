@@ -176,6 +176,37 @@ class ExecRepositoryTest {
     }
 
     @Test
+    fun testReadPageCertifiesLifecycleGapButNotificationDoesNot() = runBlocking {
+        val pid = "lifecycle-gap"
+        repository.createProcess(pid, "s1", "PTY", listOf("sh"), null, null, true)
+        repository.recordChunk(pid, 1L, "pty", "aW5wdXQ=")
+        repository.recordChunk(pid, 2L, "pty", "cmVwbHk=")
+        repository.setProcessExited(pid, 7) // Wire seq 3 is a lifecycle event.
+        repository.recordChunk(pid, 4L, "pty", "dWlk")
+        assertEquals(2L, repository.getProcess(pid)?.lastConsumedSeq)
+        // Request after 2 returns output 4, with lifecycle event 3 omitted.
+        repository.recordReadPage(pid, 2L, listOf(OutputChunkDto(4L, "pty", "dWlk")))
+        assertEquals(4L, repository.getProcess(pid)?.lastConsumedSeq)
+        assertEquals(listOf(1L, 2L, 4L), repository.getChunks(pid).map { it.seq })
+        repository.recordChunk(pid, 5L, "pty", "dGFpbA==")
+        assertEquals(5L, repository.getProcess(pid)?.lastConsumedSeq)
+        // nextSeq is not a consumed cursor; an empty page cannot skip output.
+        repository.recordReadPage(pid, 5L, emptyList())
+        assertEquals(5L, repository.getProcess(pid)?.lastConsumedSeq)
+    }
+
+    @Test
+    fun testReadPageCannotSkipAnUnrequestedEarlierGap() = runBlocking {
+        val pid = "unsafe-forward-read"
+        repository.createProcess(pid, "s1", "Gap", listOf("sh"), null, null, false)
+        repository.recordChunk(pid, 1L, "stdout", "MQ==")
+        repository.recordReadPage(pid, 3L, listOf(OutputChunkDto(4L, "stdout", "NA==")))
+        assertEquals(1L, repository.getProcess(pid)?.lastConsumedSeq)
+        repository.recordReadPage(pid, 1L, listOf(OutputChunkDto(2L, "stdout", "Mg=="), OutputChunkDto(4L, "stdout", "NA==")))
+        assertEquals(4L, repository.getProcess(pid)?.lastConsumedSeq)
+    }
+
+    @Test
     fun testExitAndCloseKeepExitCodeInEitherArrivalOrder() = runBlocking {
         for (code in listOf(0, 7)) for (closeFirst in listOf(false, true)) {
             val pid = "exit-close-$code-$closeFirst"

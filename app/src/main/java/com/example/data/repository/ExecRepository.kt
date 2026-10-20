@@ -181,7 +181,7 @@ class ExecRepository(private val db: AppDatabase) {
 
             // Recompute contiguous cursor from persisted chunks
             val allSeqs = db.outputChunkDao().getOrderedSeqsForProcess(processId)
-            val contiguousCursor = computeContiguousCursor(allSeqs)
+            val contiguousCursor = computeContiguousCursor(allSeqs, db.processDao().getProcess(processId)?.lastConsumedSeq)
             if (contiguousCursor != null) {
                 db.processDao().updateLastConsumedSeq(processId, contiguousCursor, now)
             }
@@ -206,7 +206,7 @@ class ExecRepository(private val db: AppDatabase) {
             val insertedCount = insertedRowIds.count { it != -1L }
 
             val allSeqs = db.outputChunkDao().getOrderedSeqsForProcess(processId)
-            val contiguousCursor = computeContiguousCursor(allSeqs)
+            val contiguousCursor = computeContiguousCursor(allSeqs, db.processDao().getProcess(processId)?.lastConsumedSeq)
             if (contiguousCursor != null) {
                 db.processDao().updateLastConsumedSeq(processId, contiguousCursor, now)
             }
@@ -214,10 +214,28 @@ class ExecRepository(private val db: AppDatabase) {
         }
     }
 
-    private fun computeContiguousCursor(orderedSeqs: List<Long>): Long? {
+    // process/read enumerates all output after the requested cursor. Lifecycle
+    // events also consume sequence numbers, so a complete read page may contain
+    // legitimate gaps. Live notifications alone cannot certify those gaps.
+    suspend fun recordReadPage(processId: String, afterSeq: Long?, chunks: List<OutputChunkDto>): Int {
+        require(chunks.all { it.seq > (afterSeq ?: 0L) }) { "Read page precedes requested cursor" }
+        require(chunks.zipWithNext().all { (a, b) -> a.seq < b.seq }) { "Read page is not ordered" }
+        return db.withTransaction {
+            val priorCursor = db.processDao().getProcess(processId)?.lastConsumedSeq ?: 0L
+            val inserted = recordChunksBatch(processId, chunks)
+            if ((afterSeq ?: 0L) <= priorCursor) {
+                chunks.lastOrNull()?.let {
+                    db.processDao().updateLastConsumedSeq(processId, it.seq, System.currentTimeMillis())
+                }
+            }
+            inserted
+        }
+    }
+
+    private fun computeContiguousCursor(orderedSeqs: List<Long>, priorCursor: Long?): Long? {
         if (orderedSeqs.isEmpty()) return null
-        var expected = 1L
-        var contiguous: Long? = null
+        var expected = (priorCursor ?: 0L) + 1L
+        var contiguous: Long? = priorCursor
         for (seq in orderedSeqs) {
             if (seq == expected) {
                 contiguous = seq

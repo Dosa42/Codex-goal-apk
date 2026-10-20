@@ -389,6 +389,54 @@ class CodexWebSocketClientTest {
     }
 
     @Test
+    fun testReadCatchupCrossesExitSequenceBeforeFinalPtyOutput() = runBlocking {
+        val cursors = LinkedBlockingQueue<Long>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                val j = JSONObject(text)
+                if (!j.has("id")) return
+                val result = when (j.optString("method")) {
+                    "initialize" -> JSONObject().put("sessionId", "lifecycle-gap-session")
+                    "process/read" -> {
+                        val p = j.getJSONObject("params")
+                        val after = if (p.isNull("afterSeq")) 0L else p.getLong("afterSeq")
+                        cursors.add(after)
+                        val chunks = JSONArray()
+                        if (after == 0L) {
+                            chunks.put(JSONObject().put("seq", 1).put("stream", "pty").put("chunk", "aW5wdXQ="))
+                            chunks.put(JSONObject().put("seq", 2).put("stream", "pty").put("chunk", "cmVwbHk="))
+                        }
+                        // Exit event consumes seq 3; final PTY bytes arrive at seq 4.
+                        if (after == 2L) chunks.put(JSONObject().put("seq", 4).put("stream", "pty").put("chunk", "dWlk"))
+                        JSONObject().put("chunks", chunks).put("nextSeq", if (after == 0L) 3 else 6)
+                            .put("exited", true).put("exitCode", 7).put("closed", after != 0L)
+                    }
+                    else -> null
+                }
+                if (result != null) webSocket.send(JSONObject().put("id", j.getLong("id")).put("result", result).toString())
+            }
+        }))
+        client.start(server.url("/").toString().replace("http://", "ws://"))
+        withTimeout(5000) { while (client.connectionState.value != ConnectionState.INITIALIZED) delay(10) }
+        val pid = "exit-before-tail"
+        repository.createProcess(pid, "lifecycle-gap-session", "PTY", listOf("sh"), null, null, true)
+        val first = client.readProcessCatchup(pid, null)
+        assertTrue(first.exited)
+        assertFalse(first.closed)
+        assertEquals("false", repository.getSetting("outputComplete:$pid"))
+        client.readProcessCatchup(pid, repository.getProcess(pid)?.lastConsumedSeq)
+        assertEquals(4L, repository.getProcess(pid)?.lastConsumedSeq)
+        assertEquals("false", repository.getSetting("outputComplete:$pid"))
+        val end = client.readProcessCatchup(pid, repository.getProcess(pid)?.lastConsumedSeq)
+        assertTrue(end.closed && end.chunks.isEmpty())
+        assertEquals(listOf(0L, 2L, 4L), List(3) { cursors.poll(2, TimeUnit.SECONDS) })
+        assertEquals(listOf(1L, 2L, 4L), repository.getChunks(pid).map { it.seq })
+        assertEquals("true", repository.getSetting("outputComplete:$pid"))
+        assertEquals(7, repository.getProcess(pid)?.exitCode)
+        assertEquals(0, client.pendingRpcCount)
+    }
+
+    @Test
     fun testPaginatedCatchup() = runBlocking {
         var serverWs: WebSocket? = null
         var readCallCount = 0
