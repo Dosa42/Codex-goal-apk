@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Android App"
+rootProject.name = "Codex Goal"
 
 include(":app")

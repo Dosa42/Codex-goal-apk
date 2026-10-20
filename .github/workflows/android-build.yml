@@ -123,7 +123,20 @@ jobs:
           echo "" >> "$SIGNING_INFO_FILE"
           echo "=== Certificate Fingerprints ===" >> "$SIGNING_INFO_FILE"
           keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey >> "$SIGNING_INFO_FILE"
-          grep -E "Owner:|Issuer:|Certificate fingerprints:|SHA256:|SHA1:" "$SIGNING_INFO_FILE" || true
+          
+          # Extract clean lowercase hexadecimal SHA-256 fingerprint of the signing certificate
+          CERT_SHA256=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep "SHA256:" | head -n1 | awk '{print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "SIGNER_CERT_SHA256=$CERT_SHA256" >> "$GITHUB_ENV"
+          echo "Extracted Signer Certificate SHA256: $CERT_SHA256" | tee -a "$SIGNING_INFO_FILE"
+
+          EXPECTED_CERT="a3881d4a7f2a49681c2d00833613a344376915bc85990097fff881fb358ef33e"
+          if [ -n "${CI_DEBUG_KEYSTORE_BASE64:-}" ]; then
+            if [ "$CERT_SHA256" = "$EXPECTED_CERT" ]; then
+              echo "VERIFIED: Signing certificate matches expected persistent CI secret digest." | tee -a "$SIGNING_INFO_FILE"
+            else
+              echo "NOTE: Certificate digest $CERT_SHA256 (expected $EXPECTED_CERT)." | tee -a "$SIGNING_INFO_FILE"
+            fi
+          fi
 
       - name: Run Unit Tests
         run: |
@@ -188,6 +201,22 @@ jobs:
             fi
           fi
 
+          # 4. Generate Structured Artifact Metadata JSON
+          APK_SHA256=$(sha256sum "$APK_PATH" | awk '{print $1}')
+          RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
+          cat <<EOF > ci-artifacts/build_metadata.json
+          {
+            "applicationId": "com.dosa42.codexgoal",
+            "versionCode": $RUN_NUM,
+            "versionName": "0.1.$RUN_NUM",
+            "GITHUB_SHA": "${{ github.sha }}",
+            "GITHUB_RUN_ID": "${{ github.run_id }}",
+            "apkSha256": "$APK_SHA256",
+            "signerCertificateSha256": "${SIGNER_CERT_SHA256:-unknown}"
+          }
+          EOF
+          cat ci-artifacts/build_metadata.json
+
       - name: Upload Debug APK & Verification Manifests
         uses: actions/upload-artifact@v4
         with:
@@ -197,6 +226,7 @@ jobs:
             ci-artifacts/SHA256SUMS.txt
             ci-artifacts/SIGNING_IDENTITY.txt
             ci-artifacts/apk_contents.txt
+            ci-artifacts/build_metadata.json
           if-no-files-found: error
           retention-days: 14
 
@@ -208,6 +238,7 @@ jobs:
           path: |
             build-logs/
             app/build/reports/
+            app/build/test-results/
             app/build/outputs/logs/
           if-no-files-found: warn
           retention-days: 7

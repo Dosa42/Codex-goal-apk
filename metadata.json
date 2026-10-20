@@ -1,6 +1,6 @@
 {
-  "name": "Android App",
-  "description": "Android application built with Jetpack Compose.",
+  "name": "Codex Goal",
+  "description": "Native Android client for Codex exec-server running in Termux",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
