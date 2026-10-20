@@ -831,7 +831,7 @@ fun WorkspaceTab(viewModel: MainViewModel) {
         }
     }
     createKind?.let { kind ->
-        AlertDialog(onDismissRequest = { createKind = null }, title = { Text("New $kind in Termux") },
+        AlertDialog(onDismissRequest = { createKind = null }, title = { Text("New $kind on executor") },
             text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true,
                 label = { Text("Name") }, modifier = Modifier.testTag("workspace_new_name")) },
             confirmButton = { TextButton(onClick = { viewModel.createWorkspaceEntry(newName, kind == "folder"); createKind = null },
