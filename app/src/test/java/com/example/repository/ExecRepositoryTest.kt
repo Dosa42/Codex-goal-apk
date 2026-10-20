@@ -174,4 +174,22 @@ class ExecRepositoryTest {
         repository.setProcessRunning(pid)
         assertEquals(ProcessStatus.CLOSED.name, repository.getProcess(pid)?.status)
     }
+
+    @Test
+    fun testExitAndCloseKeepExitCodeInEitherArrivalOrder() = runBlocking {
+        for (code in listOf(0, 7)) for (closeFirst in listOf(false, true)) {
+            val pid = "exit-close-$code-$closeFirst"
+            repository.createProcess(pid, "s1", "Exit race", listOf("sh"), null, null, false)
+            if (closeFirst) repository.setProcessClosed(pid)
+            repository.setProcessExited(pid, code)
+            repository.setProcessClosed(pid)
+            // Reproduce a stale close callback that had observed a null exit code.
+            db.processDao().updateStatusAndExit(pid, ProcessStatus.CLOSED.name, null, System.currentTimeMillis())
+            // A late read with no exit field must not reopen CLOSED or erase a known code.
+            repository.setProcessExited(pid, null)
+            val process = repository.getProcess(pid)
+            assertEquals(ProcessStatus.CLOSED.name, process?.status)
+            assertEquals(code, process?.exitCode)
+        }
+    }
 }

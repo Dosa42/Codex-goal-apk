@@ -41,7 +41,7 @@ interface ProcessDao {
     @Query("SELECT * FROM processes ORDER BY createdAt DESC")
     fun getAllProcessesFlow(): Flow<List<ProcessEntity>>
 
-    @Query("UPDATE processes SET status = :status, exitCode = :exitCode, updatedAt = :timestamp WHERE processId = :processId")
+    @Query("UPDATE processes SET status = CASE WHEN status = 'CLOSED' THEN 'CLOSED' ELSE :status END, exitCode = COALESCE(:exitCode, exitCode), updatedAt = :timestamp WHERE processId = :processId")
     suspend fun updateStatusAndExit(processId: String, status: String, exitCode: Int?, timestamp: Long)
 
     @Query("UPDATE processes SET lastConsumedSeq = :seq, updatedAt = :timestamp WHERE processId = :processId AND (lastConsumedSeq IS NULL OR lastConsumedSeq < :seq)")

@@ -124,9 +124,7 @@ class ExecRepository(private val db: AppDatabase) {
 
     suspend fun setProcessClosed(processId: String) {
         val now = System.currentTimeMillis()
-        val current = db.processDao().getProcess(processId)
-        val exitCode = current?.exitCode
-        db.processDao().updateStatusAndExit(processId, ProcessStatus.CLOSED.name, exitCode, now)
+        db.processDao().updateStatusAndExit(processId, ProcessStatus.CLOSED.name, null, now)
     }
 
     suspend fun setProcessDeliveryUncertain(processId: String, uncertain: Boolean) {
