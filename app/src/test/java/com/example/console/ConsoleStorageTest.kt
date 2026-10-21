@@ -34,11 +34,13 @@ class ConsoleStorageTest {
     }
 
     @Test fun discoveryCacheKeepsItsOwnTimestampAndDoesNotCrossUrls() {
-        val descriptor = mapOf("schema" to "goal-infrastructure/1", "connections" to emptyMap<String, Any?>(), "components" to emptyList<Any>())
+        val descriptor = infrastructureFixture()
         storage.saveInfrastructure(InfrastructureObservation(descriptor = descriptor, fetchedAtEpochMs = 1234))
         storage.close()
         storage = ConsoleStorage(context)
         assertEquals(descriptor, storage.infrastructure().descriptor)
+        assertTrue(storage.infrastructure().descriptor.objects("components").all { it.containsKey("installed") && it["installed"] == null })
+        InfrastructureDescriptor.validate(storage.infrastructure().descriptor)
         assertEquals(1234L, storage.infrastructure().fetchedAtEpochMs)
         assertTrue(storage.infrastructure().stale)
         storage.infrastructureUrl = "https://custom.example/v1/infrastructure"

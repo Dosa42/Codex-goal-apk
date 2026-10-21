@@ -4,8 +4,14 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -23,6 +29,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -32,6 +41,7 @@ class ConsoleViewModelTest {
     private val models = ViewModelStore()
     private lateinit var server: MockWebServer
     private val offline = AtomicBoolean(false)
+    private val discovery = AtomicReference(infrastructureFixture())
 
     @Before fun setup() {
         Dispatchers.setMain(Dispatchers.Unconfined)
@@ -48,7 +58,7 @@ class ConsoleViewModelTest {
                     "/v1/health" -> """{"ok":true,"protocol":"goal-console/1","instanceId":"fixture-store"}"""
                     "/v1/console" -> """{"ok":true,"observedAt":"retained-observation-time","ceo":{},"team":{"agents":[]},"errors":[]}"""
                     "/v1/connections" -> """{"ok":true,"backends":[],"errors":[]}"""
-                    "/.well-known/goal-infrastructure.json" -> """{"schema":"goal-infrastructure/1","observedAt":"discovery-time","components":[{"id":"apk","source":{"version":"0.1.18"},"installed":null}],"connections":{"goalConsole":{"url":"http://127.0.0.1:8792","protocol":"goal-console/1"}},"startupKits":[]}"""
+                    "/.well-known/goal-infrastructure.json" -> ConsoleJson.writeIncludingNulls(discovery.get())
                     else -> """{"ok":true,"tasks":[],"errors":[]}"""
                 }
                 return MockResponse().setBody(body)
@@ -123,7 +133,132 @@ class ConsoleViewModelTest {
         until { model.state.value.infrastructure.error != null }
         assertTrue(model.state.value.infrastructure.stale)
         assertEquals(fetchedAt, model.state.value.infrastructure.fetchedAtEpochMs)
-        assertEquals("0.1.18", model.state.value.infrastructure.descriptor.objects("components").single().obj("source").text("version"))
+        assertEquals("0.1.19", model.state.value.infrastructure.descriptor.objects("components").first().obj("source").text("version"))
         assertEquals(2, server.requestCount)
+    }
+
+    @Test fun malformedDiscoveryRetainsLastValidCacheAndNeverAppliesItsBinding() = runBlocking {
+        val model = model()
+        until { model.state.value.initialized }
+        model.refreshInfrastructureNow()
+        until { !model.state.value.infrastructure.stale }
+        val good = model.state.value.infrastructure
+        val endpoint = model.state.value.endpoint
+        val unsupported = infrastructureFixture("http://127.0.0.1:9876").let { value ->
+            value + ("connections" to (value.obj("connections") + ("execServer" to mapOf(
+                "url" to "ws://127.0.0.1:9877", "protocol" to "future-exec-server-incompatible"))))
+        }
+        for ((bad, expectedError) in listOf(
+            (infrastructureFixture() + ("components" to emptyList<JsonObject>())) to "Missing canonical component IDs",
+            unsupported to "execServer protocol mismatch"
+        )) {
+            discovery.set(bad)
+            model.refreshInfrastructureNow()
+            until { model.state.value.infrastructure.stale && !model.state.value.infrastructure.loading &&
+                model.state.value.infrastructure.error?.contains(expectedError) == true }
+            assertNotNull(model.state.value.infrastructure.error)
+            assertEquals(good.descriptor, model.state.value.infrastructure.descriptor)
+            assertEquals(good.fetchedAtEpochMs, model.state.value.infrastructure.fetchedAtEpochMs)
+            assertEquals(endpoint, model.state.value.endpoint)
+            ConsoleStorage(application).use {
+                assertEquals(good.descriptor, it.infrastructure().descriptor)
+                assertEquals(good.fetchedAtEpochMs, it.infrastructure().fetchedAtEpochMs)
+                assertEquals(endpoint, it.endpoint)
+            }
+        }
+    }
+
+    @Test fun discoveredDefaultArchiveLoadSurvivesObserverCancellationAndRestartsObservation() = runBlocking {
+        val target = MockWebServer()
+        target.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setBody(when (request.requestUrl!!.encodedPath) {
+                "/v1/health" -> """{"ok":true,"protocol":"goal-console/1","instanceId":"target-store"}"""
+                "/v1/console" -> """{"ok":true,"observedAt":"target-live","errors":[]}"""
+                else -> """{"ok":true,"tasks":[],"events":[],"cursor":41,"hasMore":false,"errors":[]}"""
+            })
+        }
+        target.start()
+        val enteredArchiveRead = CompletableDeferred<Unit>()
+        val releaseArchiveRead = CompletableDeferred<Unit>()
+        val oldEndpoint = server.url("/").toString().trimEnd('/')
+        val newEndpoint = target.url("/").toString().trimEnd('/')
+        application.getSharedPreferences("goal-console", 0).edit().remove("endpoint")
+            .putString("discoveredConsoleDefault", oldEndpoint).commit()
+        ConsoleStorage(application).use {
+            it.registerArchive(newEndpoint, "target-store")
+            it.append(ConsoleStorage.archiveKey(newEndpoint, "target-store"),
+                EventPage(listOf(mapOf("seq" to 41, "data" to "target-retained")), 41, false))
+        }
+        discovery.set(infrastructureFixture(newEndpoint))
+        val model = ConsoleViewModel(application) { storage, endpoint ->
+            if (endpoint == newEndpoint) {
+                enteredArchiveRead.complete(Unit)
+                releaseArchiveRead.await()
+            }
+            readConsoleEndpointArchive(storage, endpoint)
+        }.also { models.put("console", it) }
+        // Same endpoint/initialized keys and cancellation behavior as the screen's LaunchedEffect.
+        var observer = launch {
+            model.state.map { it.endpoint to it.initialized }.distinctUntilChanged().collectLatest { (_, initialized) ->
+                if (initialized) model.observe()
+            }
+        }
+        try {
+            until { enteredArchiveRead.isCompleted }
+            assertEquals(oldEndpoint, model.state.value.endpoint)
+            assertTrue(model.state.value.initialized)
+            observer.cancelAndJoin()
+            releaseArchiveRead.complete(Unit)
+            until { model.state.value.endpoint == newEndpoint && model.state.value.initialized }
+            assertEquals("target-store", model.state.value.eventArchive)
+            assertEquals(41L, model.state.value.cursor)
+            assertEquals("target-retained", model.state.value.events.single()["data"])
+            observer = launch { model.observe() }
+            until { model.state.value.ready && model.state.value.snapshot.text("observedAt") == "target-live" }
+            assertTrue(target.requestCount > 0)
+            ConsoleStorage(application).use { assertEquals(newEndpoint, it.endpoint) }
+        } finally {
+            releaseArchiveRead.complete(Unit)
+            observer.cancelAndJoin()
+            target.shutdown()
+        }
+    }
+
+    @Test fun savingDiscoveryUrlBReplacesDelayedAWithoutAnotherRefreshOrTimer() = runBlocking {
+        val arrivedA = CountDownLatch(1)
+        val releaseA = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                arrivedA.countDown()
+                releaseA.await(10, TimeUnit.SECONDS)
+                return MockResponse().setBody(ConsoleJson.writeIncludingNulls(infrastructureFixture() + ("observedAt" to "A")))
+            }
+        }
+        val target = MockWebServer()
+        target.enqueue(MockResponse().setBody(ConsoleJson.writeIncludingNulls(infrastructureFixture() + ("observedAt" to "B"))))
+        target.start()
+        val model = model()
+        try {
+            until { model.state.value.initialized }
+            model.refreshInfrastructureNow()
+            until { arrivedA.count == 0L }
+            model.saveInfrastructureUrl(target.url("/").toString())
+            until { model.state.value.infrastructure.descriptor.text("observedAt") == "B" }
+            assertEquals(1L, releaseA.count) // A has not responded; B was actually fetched immediately.
+            assertEquals(1, target.requestCount)
+            assertFalse(model.state.value.infrastructure.stale)
+            val urlB = InfrastructureClient.discoveryUrl(target.url("/").toString())
+            assertEquals(urlB, model.state.value.infrastructure.url)
+            ConsoleStorage(application).use {
+                assertEquals(urlB, it.infrastructureUrl)
+                assertEquals("B", it.infrastructure().descriptor.text("observedAt"))
+            }
+            releaseA.countDown()
+            delay(100)
+            assertEquals("B", model.state.value.infrastructure.descriptor.text("observedAt"))
+        } finally {
+            releaseA.countDown()
+            target.shutdown()
+        }
     }
 }

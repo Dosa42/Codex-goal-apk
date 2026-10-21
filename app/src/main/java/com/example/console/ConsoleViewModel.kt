@@ -7,8 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.CodexGoalApplication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,13 +49,30 @@ data class ConsoleState(
     val infrastructureDetails: JsonObject = emptyMap()
 )
 
-class ConsoleViewModel(application: Application) : AndroidViewModel(application) {
+internal suspend fun readConsoleEndpointArchive(storage: ConsoleStorage, endpoint: String): JsonObject =
+    withContext(Dispatchers.IO) {
+        val instance = storage.lastInstance(endpoint)
+        val key = if (instance.isBlank()) endpoint else ConsoleStorage.archiveKey(endpoint, instance)
+        mapOf(
+            "instance" to instance, "archives" to storage.archives(endpoint),
+            "cursor" to storage.cursor(key), "events" to storage.events(key), "actions" to storage.actions(endpoint)
+        )
+    }
+
+class ConsoleViewModel @JvmOverloads constructor(
+    application: Application,
+    private val readEndpointArchive: suspend (ConsoleStorage, String) -> JsonObject = ::readConsoleEndpointArchive
+) : AndroidViewModel(application) {
     private val storage = ConsoleStorage(application)
     private val mutable = MutableStateFlow(ConsoleState())
     val state = mutable.asStateFlow()
     private val initialized = CompletableDeferred<Unit>()
     private var fetchingEvents = false
-    private var fetchingInfrastructure = false
+    private var infrastructureJob: Job? = null
+    private var infrastructureJobUrl: String? = null
+    private var infrastructureGeneration = 0L
+    private var endpointLoadGeneration = 0L
+    private var pendingEndpointLoad: Long? = null
     private val archiveSelection = ArchiveSelection()
 
     init {
@@ -75,29 +95,25 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun loadEndpoint(endpoint: String) {
         val normalized = ConsoleClient.normalizeEndpoint(endpoint)
+        val generation = ++endpointLoadGeneration
+        pendingEndpointLoad = generation
         val token = archiveSelection.begin(normalized, "loading")
-        mutable.update { ConsoleState(endpoint = normalized, ceoDraft = it.ceoDraft,
-            infrastructure = it.infrastructure, infrastructureDetails = it.infrastructureDetails) }
-        val local = withContext(Dispatchers.IO) {
-            val instance = storage.lastInstance(normalized)
-            val key = if (instance.isBlank()) normalized else ConsoleStorage.archiveKey(normalized, instance)
-            mapOf(
-                "instance" to instance, "archives" to storage.archives(normalized),
-                "cursor" to storage.cursor(key), "events" to storage.events(key), "actions" to storage.actions(normalized)
-            )
-        }
-        if (!archiveSelection.matches(token)) return
-        val instance = local.text("instance")
-        archiveSelection.begin(normalized, instance)
-        mutable.update { previous -> ConsoleState(
-            endpoint = normalized, initialized = true, cursor = local.number("cursor") ?: 0,
-            events = local.objects("events"), actions = local.objects("actions"),
-            eventArchive = instance, archives = (local["archives"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-            canLoadOlder = local.objects("events").isNotEmpty(), ceoDraft = previous.ceoDraft,
-            infrastructure = previous.infrastructure, infrastructureDetails = previous.infrastructureDetails,
-            archiveNotice = if (instance.isBlank()) "No saved event store; waiting for live identity"
-                else "Retained store $instance · live identity unverified"
-        ) }
+        try {
+            // Publish endpoint and its retained archive together, after IO; never strand initialized=false.
+            val local = readEndpointArchive(storage, normalized)
+            if (generation != endpointLoadGeneration || !archiveSelection.matches(token)) return
+            val instance = local.text("instance")
+            archiveSelection.begin(normalized, instance)
+            mutable.update { previous -> ConsoleState(
+                endpoint = normalized, initialized = true, cursor = local.number("cursor") ?: 0,
+                events = local.objects("events"), actions = local.objects("actions"),
+                eventArchive = instance, archives = (local["archives"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                canLoadOlder = local.objects("events").isNotEmpty(), ceoDraft = previous.ceoDraft,
+                infrastructure = previous.infrastructure, infrastructureDetails = previous.infrastructureDetails,
+                archiveNotice = if (instance.isBlank()) "No saved event store; waiting for live identity"
+                    else "Retained store $instance · live identity unverified"
+            ) }
+        } finally { if (pendingEndpointLoad == generation) pendingEndpointLoad = null }
     }
 
     fun report(label: String, error: Throwable) {
@@ -114,6 +130,7 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun identifyStore(endpoint: String, instance: String) {
         require(instance.isNotBlank()) { "Health response has no instanceId; event cursor cannot be scoped safely" }
+        if (pendingEndpointLoad != null) return
         if (endpoint != state.value.endpoint || instance == state.value.instanceId) return
         val previous = state.value.instanceId.ifBlank { state.value.eventArchive }
         val token = archiveSelection.begin(endpoint, instance)
@@ -165,49 +182,67 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { initialized.await(); refreshInfrastructure() }
     }
 
-    private suspend fun refreshInfrastructure() {
-        if (fetchingInfrastructure) return
-        fetchingInfrastructure = true
+    private suspend fun refreshInfrastructure(replace: Boolean = false) {
         val url = state.value.infrastructure.url
+        val active = infrastructureJob?.takeIf { it.isActive && infrastructureJobUrl == url && !replace }
+        val job = active ?: run {
+            val generation = ++infrastructureGeneration
+            infrastructureJob?.cancel()
+            viewModelScope.launch(start = CoroutineStart.LAZY) {
+                fetchInfrastructure(url, generation)
+            }.also { infrastructureJob = it; infrastructureJobUrl = url; it.start() }
+        }
+        try { job.join() }
+        finally { if (!currentCoroutineContext().isActive) job.cancel() }
+    }
+
+    private fun currentInfrastructure(url: String, generation: Long) =
+        generation == infrastructureGeneration && url == state.value.infrastructure.url
+
+    private suspend fun fetchInfrastructure(url: String, generation: Long) {
         mutable.update { it.copy(infrastructure = it.infrastructure.copy(
             loading = true, attemptedAtEpochMs = System.currentTimeMillis())) }
         try {
             val descriptor = InfrastructureClient().discover(url)
-            if (url != state.value.infrastructure.url) return
+            // Binding validation is part of descriptor acceptance, before saving a fresh observation.
+            val consoleDefault = InfrastructureDescriptor.defaultBinding(descriptor, "goalConsole")
+            val execDefault = InfrastructureDescriptor.defaultBinding(descriptor, "execServer")
+            if (!currentInfrastructure(url, generation)) return
             val observation = InfrastructureObservation(
                 url, descriptor, System.currentTimeMillis(), state.value.infrastructure.attemptedAtEpochMs,
                 stale = false
             )
             withContext(Dispatchers.IO) { storage.saveInfrastructure(observation) }
-            if (url != state.value.infrastructure.url) return
+            if (!currentInfrastructure(url, generation)) return
             mutable.update { it.copy(infrastructure = observation) }
             clearError("infrastructure")
-            try {
-                val consoleDefault = InfrastructureDescriptor.defaultBinding(descriptor, "goalConsole")
-                val execDefault = InfrastructureDescriptor.defaultBinding(descriptor, "execServer")
-                if (state.value.busy == null) {
-                    val endpoint = withContext(Dispatchers.IO) {
-                        consoleDefault?.let { storage.applyConsoleDefault(it) }
-                        storage.endpoint
+            // Adoption survives cancellation of the lifecycle observer that the new endpoint replaces.
+            viewModelScope.launch {
+                try {
+                    if (!currentInfrastructure(url, generation)) return@launch
+                    if (state.value.busy == null) {
+                        val endpoint = withContext(Dispatchers.IO) {
+                            if (currentInfrastructure(url, generation)) consoleDefault?.let { storage.applyConsoleDefault(it) }
+                            storage.endpoint
+                        }
+                        if (currentInfrastructure(url, generation) && endpoint != state.value.endpoint) loadEndpoint(endpoint)
                     }
-                    if (endpoint != state.value.endpoint) loadEndpoint(endpoint)
-                }
-                execDefault?.let {
-                    (getApplication<Application>() as? CodexGoalApplication)?.repository
-                        ?.applyInfrastructureDefaultEndpoint(it)
-                }
-                clearError("infrastructure bindings")
-            } catch (e: Exception) { report("infrastructure bindings", e) }
+                    execDefault?.takeIf { currentInfrastructure(url, generation) }?.let {
+                        (getApplication<Application>() as? CodexGoalApplication)?.repository
+                            ?.applyInfrastructureDefaultEndpoint(it)
+                    }
+                    clearError("infrastructure bindings")
+                } catch (e: Exception) { report("infrastructure bindings", e) }
+            }.join()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            if (url == state.value.infrastructure.url) {
+            if (currentInfrastructure(url, generation)) {
                 mutable.update { it.copy(infrastructure = it.infrastructure.copy(
                     stale = true, error = e.message ?: e.toString())) }
                 report("infrastructure", e)
             }
         } finally {
-            fetchingInfrastructure = false
-            if (url == state.value.infrastructure.url)
+            if (currentInfrastructure(url, generation))
                 mutable.update { it.copy(infrastructure = it.infrastructure.copy(loading = false)) }
         }
     }
@@ -219,7 +254,7 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.IO) { storage.infrastructureUrl = url }
                 mutable.update { it.copy(infrastructure = InfrastructureObservation(url)) }
                 clearError("infrastructure settings")
-                refreshInfrastructure()
+                refreshInfrastructure(replace = true)
             } catch (e: Exception) { report("infrastructure settings", e) }
         }
     }

@@ -39,7 +39,7 @@ class ConsoleStorage(context: Context) : SQLiteOpenHelper(context, "goal-console
     }
 
     @Synchronized fun saveInfrastructure(value: InfrastructureObservation) {
-        check(prefs.edit().putString("infrastructureSnapshot", ConsoleJson.write(mapOf(
+        check(prefs.edit().putString("infrastructureSnapshot", ConsoleJson.writeIncludingNulls(mapOf(
             "url" to value.url, "descriptor" to value.descriptor, "fetchedAtEpochMs" to value.fetchedAtEpochMs
         ))).commit())
     }

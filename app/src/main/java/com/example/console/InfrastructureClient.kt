@@ -1,8 +1,6 @@
 package com.example.console
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -26,6 +24,7 @@ data class InfrastructureObservation(
 
 object InfrastructureDescriptor {
     const val SCHEMA = "goal-infrastructure/1"
+    val requiredComponentIds = setOf("codex-goal-apk", "native-hub", "meta-hub", "codex-browser-agent")
     val defaultUrls = linkedMapOf(
         "metaHub" to "http://127.0.0.1:8788",
         "proxy" to "http://127.0.0.1:8080",
@@ -41,6 +40,37 @@ object InfrastructureDescriptor {
         require(value.text("schema") == SCHEMA) { "Endpoint is not a $SCHEMA descriptor" }
         require(value["connections"] is Map<*, *>) { "Infrastructure descriptor has no connections object" }
         require(value["components"] is List<*>) { "Infrastructure descriptor has no components array" }
+        require(value["startupKits"] is List<*>) { "Infrastructure descriptor has no startupKits array" }
+        val ids = mutableSetOf<String>()
+        for (entry in value["components"] as List<*>) {
+            require(entry is Map<*, *>) { "Infrastructure component must be an object" }
+            val id = entry["id"]
+            require(id is String && id.isNotBlank()) { "Infrastructure component has no ID" }
+            require(ids.add(id)) { "Duplicate infrastructure component ID: $id" }
+            require(entry["name"] is String && (entry["name"] as String).isNotBlank()) { "$id has no name" }
+            require(entry["source"] is Map<*, *>) { "$id.source must be an object" }
+            for (state in listOf("source", "packaged", "installed")) {
+                require(entry.containsKey(state)) { "$id.$state is missing" }
+                val observation = entry[state]
+                require(observation == null || observation is Map<*, *>) { "$id.$state must be an object or null" }
+                if (observation is Map<*, *>) require(
+                    observation["version"] is String && (observation["version"] as String).isNotBlank()
+                ) { "$id.$state.version must be a nonempty string" }
+            }
+        }
+        require(ids.containsAll(requiredComponentIds)) { "Missing canonical component IDs: ${requiredComponentIds - ids}" }
+        for (id in defaultUrls.keys) {
+            val connection = value.obj("connections")[id]
+            require(connection is Map<*, *>) { "Missing infrastructure connection: $id" }
+            val url = connection["url"]
+            val protocol = connection["protocol"]
+            require(url is String && protocol is String && protocol.isNotBlank()) { "$id requires URL and protocol strings" }
+            val uri = java.net.URI(url)
+            val schemes = if (id in listOf("nativeCodex", "execServer")) listOf("ws", "wss") else listOf("http", "https")
+            require(uri.scheme in schemes && !uri.host.isNullOrBlank()) { "$id requires a ${schemes.joinToString("/")} URL" }
+        }
+        defaultBinding(value, "goalConsole")
+        defaultBinding(value, "execServer")
         return value
     }
 
@@ -56,7 +86,7 @@ object InfrastructureDescriptor {
                 return ConsoleClient.normalizeEndpoint(url)
             }
             "execServer" -> {
-                require(protocol.contains("exec-server", ignoreCase = true)) { "execServer protocol mismatch: $protocol" }
+                require(protocol == "exec-server-jsonrpc") { "execServer protocol mismatch: $protocol" }
                 val uri = java.net.URI(url)
                 require(uri.scheme in listOf("ws", "wss") && !uri.host.isNullOrBlank()) { "execServer requires a WebSocket URL" }
                 return url
@@ -112,28 +142,31 @@ class InfrastructureClient(private val http: OkHttpClient = defaultHttp) {
     suspend fun discover(url: String): JsonObject =
         InfrastructureDescriptor.validate(readJson(discoveryUrl(url)))
 
-    suspend fun readJson(url: String): JsonObject = withContext(Dispatchers.IO) {
+    suspend fun readJson(url: String): JsonObject = suspendCancellableCoroutine { continuation ->
         val call = http.newCall(Request.Builder().url(url).header("Accept", "application/json").get().build())
-        val response = suspendCancellableCoroutine<Response> { continuation ->
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
+        // Keep cancellation attached while headers AND the complete body are in flight.
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (!continuation.isCancelled) continuation.resumeWithException(e)
+            }
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val parsed = response.use {
+                        val raw = response.body?.string() ?: throw IOException("HTTP ${response.code}: empty response")
+                        val body = try { ConsoleJson.read(raw) }
+                        catch (e: Exception) { throw IOException("HTTP ${response.code}: invalid JSON: $raw", e) }
+                        if (!response.isSuccessful || body["ok"] == false) {
+                            val detail = body.obj("error").text("message").ifBlank { body.text("error").ifBlank { raw } }
+                            throw ConsoleHttpException(response.code, body, "HTTP ${response.code}: $detail")
+                        }
+                        body
+                    }
+                    if (!continuation.isCancelled) continuation.resume(parsed)
+                } catch (e: Exception) {
                     if (!continuation.isCancelled) continuation.resumeWithException(e)
                 }
-                override fun onResponse(call: Call, response: Response) {
-                    continuation.resume(response) { _, resource, _ -> resource.close() }
-                }
-            })
-        }
-        response.use {
-            val raw = response.body?.string() ?: throw IOException("HTTP ${response.code}: empty response")
-            val parsed = try { ConsoleJson.read(raw) }
-            catch (e: Exception) { throw IOException("HTTP ${response.code}: invalid JSON: $raw", e) }
-            if (!response.isSuccessful || parsed["ok"] == false) {
-                val detail = parsed.obj("error").text("message").ifBlank { parsed.text("error").ifBlank { raw } }
-                throw ConsoleHttpException(response.code, parsed, "HTTP ${response.code}: $detail")
             }
-            parsed
-        }
+        })
     }
 }

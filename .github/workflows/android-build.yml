@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GOAL_APK_VERSION_CODE: '18'
+      GOAL_APK_VERSION_CODE: '19'
       NDK_VERSION: ${{ github.event.inputs.ndk_version || '27.2.12479018' }}
       CMAKE_VERSION: ${{ github.event.inputs.cmake_version || '3.22.1' }}
       EXPECTED_JNI_LIBS: ${{ github.event.inputs.expected_jni_libs || '' }}

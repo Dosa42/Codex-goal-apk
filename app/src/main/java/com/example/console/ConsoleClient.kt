@@ -27,6 +27,7 @@ object ConsoleJson {
     fun read(text: String): JsonObject = adapter.fromJson(text)
         ?: throw IOException("Expected a JSON object")
     fun write(value: JsonObject): String = adapter.toJson(value)
+    fun writeIncludingNulls(value: JsonObject): String = adapter.serializeNulls().toJson(value)
 }
 
 @Suppress("UNCHECKED_CAST")

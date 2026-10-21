@@ -17,7 +17,7 @@ android {
     minSdk = 24
     targetSdk = 36
     val runNumber = System.getenv("GOAL_APK_VERSION_CODE")?.toIntOrNull()
-      ?: System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+      ?: 19
     versionCode = runNumber
     versionName = "0.1.$runNumber"
 
