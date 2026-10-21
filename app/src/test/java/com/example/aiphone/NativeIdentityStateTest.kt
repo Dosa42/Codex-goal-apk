@@ -27,6 +27,8 @@ class NativeIdentityStateTest {
     private lateinit var window: AccessibilityWindowInfo
     private lateinit var queue: LinkedBlockingQueue<String>
     private lateinit var receipts: ActionReceipts
+    private var clockMillis=1792616400000L
+    private var clockReads=0
     private fun set(name:String,value:Any) { service.javaClass.getDeclaredField(name).apply{isAccessible=true}.set(service,value) }
     private fun state() = service.javaClass.getDeclaredField("snapshot").apply{isAccessible=true}.get(service) as JSONObject
     private fun publishWindows() { shadowOf(service).setWindowsOnDisplay(0,listOf(AccessibilityWindowInfo.obtain(window))) }
@@ -36,6 +38,13 @@ class NativeIdentityStateTest {
         shadowOf(it).setAccessibilityWindowInfo(window)
     }
     private fun root(node:AccessibilityNodeInfo?) { shadowOf(window).setRoot(node) }
+    private fun fullState() { service.javaClass.getDeclaredMethod("emitFullState").apply{isAccessible=true}.invoke(service) }
+    private fun assertProvenance(name:String,event:JSONObject) {
+        assertEquals("state",event.getString("event"))
+        val observed=event.getJSONObject("state")
+        for(key in listOf("serviceInstanceId","revision","observedAt")) assertEquals(key,observed.get(key),event.get(key))
+        println("AI_PHONE_STATE_FIXTURE $name " + event.toString())
+    }
     private fun events(): List<JSONObject> = mutableListOf<JSONObject>().also { out -> while(true) {val s=queue.poll() ?: break;out.add(JSONObject(s))} }
     private fun nodeId(text:String):String {
         val nodes=state().getJSONArray("nodes")
@@ -56,11 +65,24 @@ class NativeIdentityStateTest {
         service=Robolectric.buildService(AiPhoneAccessibilityService::class.java).create().get()
         receipts=ActionReceipts(service);queue=LinkedBlockingQueue()
         set("socket",Socket());set("outbound",queue);set("receipts",receipts);set("epoch","regression-epoch")
+        set("observationClock", { clockReads++; clockMillis+=1000; java.time.Instant.ofEpochMilli(clockMillis).toString() })
         window=AccessibilityWindowInfo.obtain()
         shadowOf(window).setId(7);shadowOf(window).setDisplayId(0)
         publishWindows()
     }
     @After fun cleanup() { service.onDestroy() }
+
+    @Test fun initialFullStateUsesExactSnapshotProvenanceAfterClockAdvances() {
+        root(node("Initial"));capture(false)
+        val observedAt=state().getString("observedAt")
+        val readsAtCapture=clockReads
+        clockMillis+=5000 // The next clock read would differ; emission must reuse the observation.
+        fullState()
+        assertEquals("Sending the initial state must not read the clock again",readsAtCapture,clockReads)
+        val event=events().single()
+        assertProvenance("initial_delayed",event)
+        assertEquals(observedAt,event.getString("observedAt"))
+    }
 
     @Test fun equalLookingDistinctNativeReplacementInvalidatesOldHandleBeforeDispatch() {
         val a=node("Open");val b=node("Open")
@@ -101,6 +123,7 @@ class NativeIdentityStateTest {
 
     @Test fun rootUnavailableAndRecoveryPublishAuthoritativeFullStatesThenDeltasReconstruct() {
         val a=node("Ready");root(a);capture(false)
+        fullState();assertProvenance("timeline_initial",events().single())
         var cache=JSONObject(state().toString())
         assertEquals(0,cache.getJSONArray("unavailable").length())
         fun applyEvent(event:JSONObject) {
@@ -118,14 +141,18 @@ class NativeIdentityStateTest {
                 cache.put("displays",delta.getJSONArray("displays")).put("revision",event.getLong("revision")).put("observedAt",event.getString("observedAt"))
             }
         }
+        val readsBeforeLoss=clockReads
         root(null);capture()
-        val loss=events().single();assertEquals("state",loss.getString("event"));applyEvent(loss)
+        assertEquals("Loss observes once; envelope cannot take a second timestamp",readsBeforeLoss+1,clockReads)
+        val loss=events().single();assertProvenance("loss",loss);applyEvent(loss)
         assertTrue(cache.getJSONArray("unavailable").length()>0)
         assertEquals("window_content_unavailable",cache.getJSONArray("unavailable").getJSONObject(0).getString("code"))
         assertEquals(state().toString(),cache.toString())
         val lostRevision=cache.getLong("revision")
+        val readsBeforeRecovery=clockReads
         root(a);capture()
-        val recovery=events().single();assertEquals("state",recovery.getString("event"));applyEvent(recovery)
+        assertEquals("Recovery observes once; envelope cannot take a second timestamp",readsBeforeRecovery+1,clockReads)
+        val recovery=events().single();assertProvenance("recovery",recovery);applyEvent(recovery)
         assertTrue(cache.getLong("revision")>lostRevision);assertEquals(0,cache.getJSONArray("unavailable").length())
         assertEquals(state().toString(),cache.toString())
         a.text="Changed";capture()

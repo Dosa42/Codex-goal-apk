@@ -41,11 +41,17 @@ class AiPhoneAccessibilityService : AccessibilityService() {
     }
     private lateinit var receipts: ActionReceipts
     private val wire by lazy { WireSchema(this) }
-    private fun time() = if (Build.VERSION.SDK_INT >= 26) Instant.now().toString() else java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US).format(java.util.Date())
+    private val observationClock: () -> String = { if (Build.VERSION.SDK_INT >= 26) Instant.now().toString() else java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US).format(java.util.Date()) }
+    private fun time() = observationClock()
     private fun obj(vararg values: Pair<String, Any?>) = JSONObject().also { j -> values.forEach { j.put(it.first, it.second ?: JSONObject.NULL) } }
     private fun base() = obj("source" to "android_accessibility", "observedAt" to time(), "serviceInstanceId" to epoch, "revision" to revision)
     private fun emit(value: JSONObject) { wire.validate(value); if (socket != null) outbound.offer(value.toString()) }
     private fun eventBase() = base().also { it.remove("source") }
+    private fun emitFullState() {
+        // This envelope describes an existing observation, not a new clock read.
+        emit(obj("type" to "event", "event" to "state", "serviceInstanceId" to snapshot.getString("serviceInstanceId"),
+            "revision" to snapshot.getLong("revision"), "observedAt" to snapshot.getString("observedAt"), "state" to snapshot))
+    }
     private fun onMain(block: () -> Unit) { val task = FutureTask { block() }; main.post(task); task.get() }
 
     override fun onServiceConnected() {
@@ -101,7 +107,7 @@ class AiPhoneAccessibilityService : AccessibilityService() {
                     nodeHandles.resetEpoch()
                     emit(obj("type" to "hello", "protocol" to "ai-phone/1", "serviceInstanceId" to epoch, "capabilities" to capabilities(), "displays" to displayList()))
                     capture(false)
-                    emit(eventBase().put("type", "event").put("event", "state").put("state", snapshot))
+                    emitFullState()
                 }
                 writer = Thread({
                     try { connection.getOutputStream().bufferedWriter(Charsets.UTF_8).use { out ->
@@ -213,7 +219,7 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         snapshot = base().put("displays",displays).put("windows",wins).put("nodes",nodes).put("unavailable",unavailable).put("mode","full")
         if (publish && changed && unavailableChanged) {
             // unavailable has no typed delta field in ai-phone/1: replace with an authoritative full state.
-            emit(eventBase().put("type","event").put("event","state").put("state",snapshot))
+            emitFullState()
         } else if (publish && changed) {
             val changedNodes=JSONArray();val changedWindows=JSONArray();val windowIds=mutableSetOf<Int>()
             for(i in 0 until nodes.length()) { val n=nodes.getJSONObject(i);if(oldNodes[n.getString("id")]!=n.toString()) changedNodes.put(n) }
