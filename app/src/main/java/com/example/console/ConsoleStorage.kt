@@ -14,8 +14,35 @@ class ConsoleStorage(context: Context) : SQLiteOpenHelper(context, "goal-console
     private val prefs = context.getSharedPreferences("goal-console", Context.MODE_PRIVATE)
     private val snapshotFile = AtomicFile(File(context.filesDir, "goal-console-last-snapshot.json"))
     var endpoint: String
-        get() = prefs.getString("endpoint", ConsoleClient.DEFAULT_ENDPOINT)!!
+        get() = prefs.getString("endpoint", null) ?: prefs.getString("discoveredConsoleDefault", ConsoleClient.DEFAULT_ENDPOINT)!!
         set(value) { prefs.edit().putString("endpoint", value).commit() }
+
+    var infrastructureUrl: String
+        get() = prefs.getString("infrastructureUrl", InfrastructureClient.DEFAULT_DISCOVERY)!!
+        set(value) { check(prefs.edit().putString("infrastructureUrl", value).commit()) }
+
+    @Synchronized fun applyConsoleDefault(value: String) {
+        if (!prefs.contains("endpoint"))
+            check(prefs.edit().putString("discoveredConsoleDefault", value).commit())
+    }
+
+    @Synchronized fun infrastructure(): InfrastructureObservation {
+        val saved = try { prefs.getString("infrastructureSnapshot", null)?.let(ConsoleJson::read) ?: emptyMap() }
+        catch (e: Exception) {
+            return InfrastructureObservation(url = infrastructureUrl, error = "Saved discovery is unreadable: ${e.message}")
+        }
+        val matches = saved.text("url") == infrastructureUrl
+        return InfrastructureObservation(
+            url = infrastructureUrl, descriptor = if (matches) saved.obj("descriptor") else emptyMap(),
+            fetchedAtEpochMs = if (matches) saved.number("fetchedAtEpochMs") else null, stale = true
+        )
+    }
+
+    @Synchronized fun saveInfrastructure(value: InfrastructureObservation) {
+        check(prefs.edit().putString("infrastructureSnapshot", ConsoleJson.write(mapOf(
+            "url" to value.url, "descriptor" to value.descriptor, "fetchedAtEpochMs" to value.fetchedAtEpochMs
+        ))).commit())
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE cursors(endpoint TEXT PRIMARY KEY, seq INTEGER NOT NULL)")

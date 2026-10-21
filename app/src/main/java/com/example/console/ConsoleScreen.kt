@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -33,7 +34,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.service.TermuxLauncher
 import com.example.voice.VoiceConsole
 
-private val sections = listOf("Overview", "Team", "Assign", "Results", "Ledger", "Connections", "Events", "Voice", "Settings")
+private val sections = listOf("Overview", "Team", "Assign", "Results", "Ledger", "Connections", "Events", "Voice", "Settings", "Infrastructure")
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -103,6 +104,7 @@ fun ConsoleScreen(model: ConsoleViewModel = viewModel()) {
                     6 -> Events(state, model)
                     7 -> VoiceConsole()
                     8 -> ConsoleSettings(state, model)
+                    9 -> Infrastructure(state, model)
                 }
             }
         }
@@ -500,6 +502,7 @@ private fun Events(state: ConsoleState, model: ConsoleViewModel) {
 @Composable
 private fun ConsoleSettings(state: ConsoleState, model: ConsoleViewModel) {
     var endpoint by rememberSaveable(state.endpoint) { mutableStateOf(state.endpoint) }
+    var discovery by rememberSaveable(state.infrastructure.url) { mutableStateOf(state.infrastructure.url) }
     LazyColumn(Modifier.fillMaxSize().testTag("console_settings"), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Console connection", style = MaterialTheme.typography.titleMedium) }
         item { Field("Goal Console URL", endpoint, { endpoint = it }, "console_endpoint", true) }
@@ -509,7 +512,98 @@ private fun ConsoleSettings(state: ConsoleState, model: ConsoleViewModel) {
             }
         }
         item { Text("Default: ${ConsoleClient.DEFAULT_ENDPOINT}. This setting is saved independently from the executor WebSocket endpoint.") }
+        item { Field("Meta-Hub or infrastructure discovery URL", discovery, { discovery = it }, "console_infrastructure_url", true) }
+        item {
+            OutlinedButton(onClick = { model.saveInfrastructureUrl(discovery) }, modifier = Modifier.testTag("console_infrastructure_save")) {
+                Text("Save discovery URL and refresh")
+            }
+        }
+        item { Text("Infrastructure refreshes once per minute while Console is active. Saved custom connections and executor session history are retained. See Infrastructure for versions, observations and protocol/schema links.") }
         item { Text("Start Console dispatch: ~/.local/bin/goal-console ensure. HTTP readiness is checked after dispatch. Status and events refresh while this screen is active.") }
         item { Panel("Voice observation") { JsonDetails("voice", state.snapshot.obj("voice")) } }
+    }
+}
+
+@Composable
+private fun Infrastructure(state: ConsoleState, model: ConsoleViewModel) {
+    val observation = state.infrastructure
+    val descriptor = observation.descriptor
+    val components = descriptor.objects("components")
+    val connections = descriptor.obj("connections")
+    val connectionIds = (InfrastructureDescriptor.defaultUrls.keys + connections.keys).distinct()
+    LazyColumn(Modifier.fillMaxSize().testTag("console_infrastructure"),
+        contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Panel("Shared infrastructure") {
+                Text(descriptor.text("schema").ifBlank { "goal-infrastructure/1 · discovery unverified" })
+                SelectionContainer { Text(observation.url) }
+                Text("Selected console: ${state.endpoint}")
+                Text("Fetched: ${observation.fetchedAtEpochMs?.let { java.util.Date(it).toString() } ?: "not observed"}")
+                Text("Descriptor observation: ${descriptor["observedAt"] ?: "not reported"}")
+                Text(if (observation.loading) "Refreshing…" else if (observation.stale) "Retained discovery · stale/unverified" else "Discovery fetched")
+                observation.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedButton(onClick = model::refreshInfrastructureNow, enabled = !observation.loading,
+                    modifier = Modifier.testTag("console_infrastructure_refresh")) { Text("Refresh discovery") }
+                Text("Source, packaged, installed, reachable and executed are separate observations. Discovery fetch does not execute a component.")
+            }
+        }
+        item { Text("Components · ${components.size}", style = MaterialTheme.typography.titleMedium) }
+        items(components) { component ->
+            Panel(component.text("name").ifBlank { component.text("id") }) {
+                Text(component.text("id"), style = MaterialTheme.typography.labelSmall)
+                listOf("source", "packaged", "installed", "reachable", "executed").forEach { phase ->
+                    val value = component[phase] ?: component.obj("observations")[phase]
+                    Text(phase.replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.Bold)
+                    if (value == null) Text("No $phase observation")
+                    else if (value is Map<*, *>) {
+                        @Suppress("UNCHECKED_CAST") val details = value as JsonObject
+                        Text(listOfNotNull(
+                            details.text("version").takeIf { it.isNotBlank() }?.let { "Version $it" },
+                            details["versionCode"]?.let { "code $it" },
+                            details.text("status").takeIf { it.isNotBlank() }
+                        ).joinToString(" · ").ifBlank { "Reported observation" })
+                        details["observedAt"]?.let { Text("Observed: $it") }
+                        details["method"]?.let { Text("Method: $it") }
+                        SelectionContainer { details["sha256"]?.let { Text("SHA-256: $it") } }
+                        JsonDetails("$phase details", details)
+                    } else Text("Reported: $value")
+                }
+                JsonDetails("complete component", component)
+            }
+        }
+        item { Text("Protocol connections", style = MaterialTheme.typography.titleMedium) }
+        items(connectionIds) { id ->
+            val connection = connections.obj(id)
+            Panel(id) {
+                Text(connection.text("protocol").ifBlank { "Protocol unverified · bundled default URL" })
+                SelectionContainer { Text(connection.text("url").ifBlank { InfrastructureDescriptor.defaultUrls[id].orEmpty() }) }
+                if (connection.isNotEmpty()) {
+                    InfrastructureDescriptor.links(connection).forEach { (label, url) ->
+                        InfrastructureLink(label, url, model)
+                    }
+                    JsonDetails("connection metadata", connection)
+                }
+            }
+        }
+        item { Panel("Selected schema / protocol response") {
+            if (state.infrastructureDetails.isEmpty()) Text("Choose a JSON link to inspect its complete response.")
+            else JsonDetails("complete JSON response", state.infrastructureDetails, true)
+        } }
+        item { Panel("Startup kits") {
+            JsonDetails("complete kit descriptors", mapOf("startupKits" to descriptor["startupKits"]))
+        } }
+        item { Panel("Complete discovery document") { JsonDetails("descriptor", descriptor) } }
+    }
+}
+
+@Composable
+private fun InfrastructureLink(label: String, url: String, model: ConsoleViewModel) {
+    val uriHandler = LocalUriHandler.current
+    SelectionContainer { Text("$label: $url", style = MaterialTheme.typography.bodySmall) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { model.inspectInfrastructureLink(url) }) { Text("View JSON") }
+        OutlinedButton(onClick = {
+            try { uriHandler.openUri(url) } catch (e: Exception) { model.report("infrastructure link", e) }
+        }) { Text("Open link") }
     }
 }

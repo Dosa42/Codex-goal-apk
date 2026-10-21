@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.CodexGoalApplication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,9 @@ data class ConsoleState(
     val busy: String? = null,
     val actionResponse: JsonObject? = null,
     val ceoDraft: JsonObject = emptyMap(),
-    val ceoReceipt: JsonObject = emptyMap()
+    val ceoReceipt: JsonObject = emptyMap(),
+    val infrastructure: InfrastructureObservation = InfrastructureObservation(),
+    val infrastructureDetails: JsonObject = emptyMap()
 )
 
 class ConsoleViewModel(application: Application) : AndroidViewModel(application) {
@@ -49,11 +52,14 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
     val state = mutable.asStateFlow()
     private val initialized = CompletableDeferred<Unit>()
     private var fetchingEvents = false
+    private var fetchingInfrastructure = false
     private val archiveSelection = ArchiveSelection()
 
     init {
         viewModelScope.launch {
             try {
+                val infrastructure = withContext(Dispatchers.IO) { storage.infrastructure() }
+                mutable.update { it.copy(infrastructure = infrastructure) }
                 val endpoint = withContext(Dispatchers.IO) { storage.endpoint }
                 loadEndpoint(endpoint)
                 val draft = withContext(Dispatchers.IO) { storage.ceoDraft() }
@@ -70,7 +76,8 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun loadEndpoint(endpoint: String) {
         val normalized = ConsoleClient.normalizeEndpoint(endpoint)
         val token = archiveSelection.begin(normalized, "loading")
-        mutable.update { ConsoleState(endpoint = normalized, ceoDraft = it.ceoDraft) }
+        mutable.update { ConsoleState(endpoint = normalized, ceoDraft = it.ceoDraft,
+            infrastructure = it.infrastructure, infrastructureDetails = it.infrastructureDetails) }
         val local = withContext(Dispatchers.IO) {
             val instance = storage.lastInstance(normalized)
             val key = if (instance.isBlank()) normalized else ConsoleStorage.archiveKey(normalized, instance)
@@ -87,6 +94,7 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
             events = local.objects("events"), actions = local.objects("actions"),
             eventArchive = instance, archives = (local["archives"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
             canLoadOlder = local.objects("events").isNotEmpty(), ceoDraft = previous.ceoDraft,
+            infrastructure = previous.infrastructure, infrastructureDetails = previous.infrastructureDetails,
             archiveNotice = if (instance.isBlank()) "No saved event store; waiting for live identity"
                 else "Retained store $instance · live identity unverified"
         ) }
@@ -129,6 +137,12 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
         coroutineScope {
             launch {
                 while (isActive) {
+                    refreshInfrastructure()
+                    delay(60_000)
+                }
+            }
+            launch {
+                while (isActive) {
                     refreshBundle()
                     delay(8_000)
                 }
@@ -142,7 +156,92 @@ class ConsoleViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun refresh() { viewModelScope.launch { initialized.await(); refreshBundle() } }
+    fun refresh() {
+        viewModelScope.launch { initialized.await(); refreshBundle() }
+        refreshInfrastructureNow()
+    }
+
+    fun refreshInfrastructureNow() {
+        viewModelScope.launch { initialized.await(); refreshInfrastructure() }
+    }
+
+    private suspend fun refreshInfrastructure() {
+        if (fetchingInfrastructure) return
+        fetchingInfrastructure = true
+        val url = state.value.infrastructure.url
+        mutable.update { it.copy(infrastructure = it.infrastructure.copy(
+            loading = true, attemptedAtEpochMs = System.currentTimeMillis())) }
+        try {
+            val descriptor = InfrastructureClient().discover(url)
+            if (url != state.value.infrastructure.url) return
+            val observation = InfrastructureObservation(
+                url, descriptor, System.currentTimeMillis(), state.value.infrastructure.attemptedAtEpochMs,
+                stale = false
+            )
+            withContext(Dispatchers.IO) { storage.saveInfrastructure(observation) }
+            if (url != state.value.infrastructure.url) return
+            mutable.update { it.copy(infrastructure = observation) }
+            clearError("infrastructure")
+            try {
+                val consoleDefault = InfrastructureDescriptor.defaultBinding(descriptor, "goalConsole")
+                val execDefault = InfrastructureDescriptor.defaultBinding(descriptor, "execServer")
+                if (state.value.busy == null) {
+                    val endpoint = withContext(Dispatchers.IO) {
+                        consoleDefault?.let { storage.applyConsoleDefault(it) }
+                        storage.endpoint
+                    }
+                    if (endpoint != state.value.endpoint) loadEndpoint(endpoint)
+                }
+                execDefault?.let {
+                    (getApplication<Application>() as? CodexGoalApplication)?.repository
+                        ?.applyInfrastructureDefaultEndpoint(it)
+                }
+                clearError("infrastructure bindings")
+            } catch (e: Exception) { report("infrastructure bindings", e) }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (url == state.value.infrastructure.url) {
+                mutable.update { it.copy(infrastructure = it.infrastructure.copy(
+                    stale = true, error = e.message ?: e.toString())) }
+                report("infrastructure", e)
+            }
+        } finally {
+            fetchingInfrastructure = false
+            if (url == state.value.infrastructure.url)
+                mutable.update { it.copy(infrastructure = it.infrastructure.copy(loading = false)) }
+        }
+    }
+
+    fun saveInfrastructureUrl(value: String) {
+        viewModelScope.launch {
+            try {
+                val url = InfrastructureClient.discoveryUrl(value)
+                withContext(Dispatchers.IO) { storage.infrastructureUrl = url }
+                mutable.update { it.copy(infrastructure = InfrastructureObservation(url)) }
+                clearError("infrastructure settings")
+                refreshInfrastructure()
+            } catch (e: Exception) { report("infrastructure settings", e) }
+        }
+    }
+
+    fun inspectInfrastructureLink(url: String) {
+        viewModelScope.launch {
+            mutable.update { it.copy(infrastructureDetails = mapOf("url" to url, "loading" to true)) }
+            try {
+                val response = InfrastructureClient().readJson(url)
+                mutable.update { it.copy(infrastructureDetails = mapOf(
+                    "url" to url, "observedAtEpochMs" to System.currentTimeMillis(), "response" to response)) }
+                clearError("infrastructure link")
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                mutable.update { it.copy(infrastructureDetails = mapOf(
+                    "url" to url, "observedAtEpochMs" to System.currentTimeMillis(),
+                    "error" to (e.message ?: e.toString()),
+                    "response" to ((e as? ConsoleHttpException)?.payload ?: emptyMap<String, Any?>()))) }
+                report("infrastructure link", e)
+            }
+        }
+    }
 
     private suspend fun observed(label: String, get: suspend (ConsoleClient) -> Unit) {
         val endpoint = state.value.endpoint

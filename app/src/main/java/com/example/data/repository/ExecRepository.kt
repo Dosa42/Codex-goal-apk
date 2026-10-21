@@ -40,6 +40,13 @@ class ExecRepository(private val db: AppDatabase) {
         db.settingDao().set(SettingEntity(KEY_ENDPOINT, endpoint.trim()))
     }
 
+    suspend fun applyInfrastructureDefaultEndpoint(endpoint: String) = db.withTransaction {
+        // Existing settings and session history establish the user's executor binding.
+        if (db.settingDao().get(KEY_ENDPOINT) == null && db.sessionDao().getLatestSession() == null) {
+            db.settingDao().set(SettingEntity(KEY_ENDPOINT, endpoint))
+        }
+    }
+
     fun getEndpointFlow(): Flow<String> {
         return db.settingDao().getFlow(KEY_ENDPOINT).map { it ?: DEFAULT_ENDPOINT }
     }

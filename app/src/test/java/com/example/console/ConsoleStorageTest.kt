@@ -23,6 +23,29 @@ class ConsoleStorageTest {
     }
     @After fun cleanup() { storage.close(); context.deleteDatabase("goal-console.db") }
 
+    @Test fun discoveredDefaultCannotOverwriteAnExplicitConsoleSetting() {
+        storage.applyConsoleDefault("http://127.0.0.1:9876")
+        assertEquals("http://127.0.0.1:9876", storage.endpoint)
+        storage.endpoint = "https://custom.example/console"
+        storage.applyConsoleDefault("http://127.0.0.1:8792")
+        storage.close()
+        storage = ConsoleStorage(context)
+        assertEquals("https://custom.example/console", storage.endpoint)
+    }
+
+    @Test fun discoveryCacheKeepsItsOwnTimestampAndDoesNotCrossUrls() {
+        val descriptor = mapOf("schema" to "goal-infrastructure/1", "connections" to emptyMap<String, Any?>(), "components" to emptyList<Any>())
+        storage.saveInfrastructure(InfrastructureObservation(descriptor = descriptor, fetchedAtEpochMs = 1234))
+        storage.close()
+        storage = ConsoleStorage(context)
+        assertEquals(descriptor, storage.infrastructure().descriptor)
+        assertEquals(1234L, storage.infrastructure().fetchedAtEpochMs)
+        assertTrue(storage.infrastructure().stale)
+        storage.infrastructureUrl = "https://custom.example/v1/infrastructure"
+        assertTrue(storage.infrastructure().descriptor.isEmpty())
+        assertNull(storage.infrastructure().fetchedAtEpochMs)
+    }
+
     @Test fun cursorAndFullEventSurviveReopeningAndFailedAppend() {
         val endpoint = ConsoleClient.DEFAULT_ENDPOINT
         val key = ConsoleStorage.archiveKey(endpoint, "instance-a")

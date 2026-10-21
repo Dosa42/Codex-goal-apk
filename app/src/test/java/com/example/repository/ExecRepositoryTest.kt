@@ -41,6 +41,25 @@ class ExecRepositoryTest {
     }
 
     @Test
+    fun testInfrastructureDefaultPreservesCustomEndpointAndExistingSessionHistory() = runBlocking {
+        val discovered = "ws://127.0.0.1:9876"
+        repository.applyInfrastructureDefaultEndpoint(discovered)
+        assertEquals(discovered, repository.getEndpoint())
+        repository.setEndpoint("wss://custom.example/executor")
+        repository.saveSession(InitializeResult("saved-original"), "wss://custom.example/executor")
+        repository.createProcess("saved-process", "saved-original", "history", listOf("sh"), null, null, false)
+        repository.applyInfrastructureDefaultEndpoint("ws://127.0.0.1:33995")
+        assertEquals("wss://custom.example/executor", repository.getEndpoint())
+        assertEquals("saved-original", repository.getLatestSession()?.sessionId)
+        assertEquals("saved-process", repository.getAllProcesses().single().processId)
+        // A historical session also protects an implicit endpoint without a settings row.
+        db.openHelper.writableDatabase.execSQL("DELETE FROM settings WHERE `key`=?", arrayOf(ExecRepository.KEY_ENDPOINT))
+        repository.applyInfrastructureDefaultEndpoint(discovered)
+        assertEquals(ExecRepository.DEFAULT_ENDPOINT, repository.getEndpoint())
+        assertEquals("saved-original", repository.getLatestSession()?.sessionId)
+    }
+
+    @Test
     fun testBusySessionBecomesResumableWithoutReplacingItsIdentityOrEnvironment() = runBlocking {
         val endpoint = "ws://127.0.0.1:33995"
         repository.saveSession(InitializeResult("original-session",

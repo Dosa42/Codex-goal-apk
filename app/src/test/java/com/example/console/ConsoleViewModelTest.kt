@@ -48,13 +48,17 @@ class ConsoleViewModelTest {
                     "/v1/health" -> """{"ok":true,"protocol":"goal-console/1","instanceId":"fixture-store"}"""
                     "/v1/console" -> """{"ok":true,"observedAt":"retained-observation-time","ceo":{},"team":{"agents":[]},"errors":[]}"""
                     "/v1/connections" -> """{"ok":true,"backends":[],"errors":[]}"""
+                    "/.well-known/goal-infrastructure.json" -> """{"schema":"goal-infrastructure/1","observedAt":"discovery-time","components":[{"id":"apk","source":{"version":"0.1.18"},"installed":null}],"connections":{"goalConsole":{"url":"http://127.0.0.1:8792","protocol":"goal-console/1"}},"startupKits":[]}"""
                     else -> """{"ok":true,"tasks":[],"errors":[]}"""
                 }
                 return MockResponse().setBody(body)
             }
         }
         server.start()
-        ConsoleStorage(application).use { it.endpoint = server.url("/").toString().trimEnd('/') }
+        ConsoleStorage(application).use {
+            it.endpoint = server.url("/").toString().trimEnd('/')
+            it.infrastructureUrl = InfrastructureClient.discoveryUrl(server.url("/").toString())
+        }
     }
 
     @After fun cleanup() {
@@ -102,5 +106,24 @@ class ConsoleViewModelTest {
             file.exists() && runCatching { ConsoleJson.read(file.readText())["stale"] == true }.getOrDefault(false)
         }
         assertTrue(model.state.value.errors.values.any { it.contains("fixture offline") })
+    }
+
+    @Test fun discoveryFailureRetainsTimestampedCatalogAndCustomConsoleEndpoint() = runBlocking {
+        val model = model()
+        until { model.state.value.initialized }
+        val endpoint = model.state.value.endpoint
+        model.refreshInfrastructureNow()
+        until { !model.state.value.infrastructure.stale }
+        val fetchedAt = model.state.value.infrastructure.fetchedAtEpochMs
+        assertNotNull(fetchedAt)
+        assertEquals(endpoint, model.state.value.endpoint)
+        assertEquals("discovery-time", model.state.value.infrastructure.descriptor["observedAt"])
+        offline.set(true)
+        model.refreshInfrastructureNow()
+        until { model.state.value.infrastructure.error != null }
+        assertTrue(model.state.value.infrastructure.stale)
+        assertEquals(fetchedAt, model.state.value.infrastructure.fetchedAtEpochMs)
+        assertEquals("0.1.18", model.state.value.infrastructure.descriptor.objects("components").single().obj("source").text("version"))
+        assertEquals(2, server.requestCount)
     }
 }
