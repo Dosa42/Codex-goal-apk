@@ -1,0 +1,84 @@
+{
+  "taskId": "executor-retention-source",
+  "sourceBaseRepo": "https://github.com/DioNanos/codex-termux.git",
+  "sourceBaseCommit": "c382cb99717bbaedd0e79c61835ddfc966423424",
+  "expectedSourceTree": "e996aef0ee038c120180bc13c8e164aa95b72e01",
+  "patchSha256": "46cbc5b5d72aeeb4a347322239c0286c6e277efb95e7932d1ceb33fbed683f7f",
+  "patchPath": "/data/data/com.termux/files/home/ai-projects/codex-exec-runtime/evidence/retention-20261021/delivery/native-executor/retention.patch",
+  "sourceReadyForCI": true,
+  "completeCompilerGate": "remote CI pending; local full crate stopped before compilation at missing offline crossterm git dependency",
+  "frozenAt": "2026-10-21T02:16:28.129381+00:00",
+  "files": {
+    "codex-rs/cli/src/exec_server_command.rs": {
+      "sha256": "27231321f09e77ae7f081ee6d5cfe109f54fe94064e922456765c6b376181288",
+      "bytes": 21299
+    },
+    "codex-rs/exec-server-protocol/src/protocol.rs": {
+      "sha256": "33d451e565ad47ed5ee047259565fc90af836fba5ba5f09b7940a573dbb96262",
+      "bytes": 75656
+    },
+    "codex-rs/exec-server/README.md": {
+      "sha256": "35affb21c75fb0e7831811e66e0b97ebbfad46edafe5aa7bc0b58967d2b553d5",
+      "bytes": 18966
+    },
+    "codex-rs/exec-server/src/runtime_options.rs": {
+      "sha256": "6660de214b3d8e3c2112e06cff9ce9e1096395b50d335c5b9f50a76fa735ca70",
+      "bytes": 5311
+    },
+    "codex-rs/exec-server/src/server/handler.rs": {
+      "sha256": "f61561b90655e5289fda4b16b649c192840fa8e5321ba5c3a486301dbe3283d5",
+      "bytes": 18441
+    },
+    "codex-rs/exec-server/src/server/handler/tests.rs": {
+      "sha256": "9f7554aa5a126c0077eeee67b98c728b172d757b1bcf9d1f768dddcd35962032",
+      "bytes": 14664
+    },
+    "codex-rs/exec-server/src/server/registry.rs": {
+      "sha256": "e503bf7500f5e85910586753c0b9d57177f14a25a73468a7d7353b17125a117a",
+      "bytes": 9661
+    },
+    "codex-rs/exec-server/src/server/request_dispatcher.rs": {
+      "sha256": "af315f5947191a6fe133ae1323b097f6ca26c9e87dd34e9563ab320444b3bb0b",
+      "bytes": 13923
+    },
+    "codex-rs/exec-server/src/server/session_registry.rs": {
+      "sha256": "8751873af8ac834425487ed54072da8c9dfe2fd584f1ced5c7c4159bbe6f41ea",
+      "bytes": 15120
+    },
+    "codex-rs/exec-server/tests/process.rs": {
+      "sha256": "69eaa99f092e5647a5051ad33cf41abbe707f61e7214546077e7e534f59f422b",
+      "bytes": 32070
+    }
+  },
+  "protocol": {
+    "initialize": {
+      "clientName": "required string",
+      "resumeSessionId": "optional string; absent creates explicit new session"
+    },
+    "ephemeral": {
+      "supported": false,
+      "warning": "ephemeral:true is unknown/ignored by existing initialize deserializer; do not assume it cleans up"
+    },
+    "close": {
+      "method": "session/close",
+      "params": {},
+      "result": {},
+      "requires": "initialize then initialized",
+      "effect": "remove attached session only, terminate its processes and close connection resources; await ACK then disconnect"
+    },
+    "retention": {
+      "default": "unlimited",
+      "cli": "--detached-session-retention-secs <SECONDS>",
+      "env": "CODEX_EXEC_SERVER_DETACHED_SESSION_RETENTION_SECS",
+      "zero": "unlimited",
+      "positive": "explicit finite detached timeout"
+    },
+    "restart": "In-memory sessions do not survive executor restart; no replacement session or replay on unknown ID"
+  },
+  "destination": {
+    "repo": "Dosa42/Codex-goal-apk",
+    "branch": "executor-continuity",
+    "baseCommit": "fe3be509847cafe0c5209f7c0faf1304b89b5db9",
+    "publisher": "root"
+  }
+}

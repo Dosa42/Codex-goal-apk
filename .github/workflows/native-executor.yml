@@ -1,0 +1,125 @@
+name: Native executor continuity
+
+on:
+  push:
+    branches: [executor-continuity]
+    paths:
+      - native-executor/**
+      - .github/workflows/native-executor.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  focused-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Prepare exact patched executor source
+        run: bash native-executor/prepare-source.sh
+      - name: Install host dependencies and pinned Rust
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler libcap-dev
+          rustup toolchain install 1.95.0 --profile minimal
+      - name: Run focused native retention, cleanup, CLI and resume tests
+        working-directory: native-executor-source/codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/native-test-evidence"
+          rustup run 1.95.0 cargo test --locked -p codex-exec-server --lib retention -- --nocapture 2>&1 | tee "${GITHUB_WORKSPACE}/native-test-evidence/registry-handler.log"
+          grep -F 'test result: ok. 9 passed;' "${GITHUB_WORKSPACE}/native-test-evidence/registry-handler.log"
+          rustup run 1.95.0 cargo test --locked -p codex-cli --bin codex exec_server_command::retention_tests -- --nocapture 2>&1 | tee "${GITHUB_WORKSPACE}/native-test-evidence/cli.log"
+          grep -F 'test result: ok. 2 passed;' "${GITHUB_WORKSPACE}/native-test-evidence/cli.log"
+          rustup run 1.95.0 cargo test --locked -p codex-exec-server --test process retention_close_probe_session_over_websocket -- --exact --nocapture 2>&1 | tee "${GITHUB_WORKSPACE}/native-test-evidence/close-wire.log"
+          grep -F 'test result: ok. 1 passed;' "${GITHUB_WORKSPACE}/native-test-evidence/close-wire.log"
+          rustup run 1.95.0 cargo test --locked -p codex-exec-server --test process exec_server_resumes_detached_session_without_killing_processes -- --exact --nocapture 2>&1 | tee "${GITHUB_WORKSPACE}/native-test-evidence/resume-wire.log"
+          grep -F 'test result: ok. 1 passed;' "${GITHUB_WORKSPACE}/native-test-evidence/resume-wire.log"
+      - name: Upload focused test logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: native-executor-tests-${{ github.sha }}
+          path: native-test-evidence/
+          if-no-files-found: warn
+
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "4"
+      CARGO_PROFILE_RELEASE_PANIC: abort
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Prepare exact patched executor source
+        run: bash native-executor/prepare-source.sh
+      - name: Install pinned cross-build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler
+          rustup toolchain install 1.95.0 --profile minimal --target aarch64-linux-android
+          : "${ANDROID_HOME:?Android SDK is required on this runner}"
+          export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/cmdline-tools/bin:${PATH}"
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "${GITHUB_ENV}"
+      - name: Build complete Android payload
+        working-directory: native-executor-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+          export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+          export LIBLZMA_NO_PKG_CONFIG=1 PKG_CONFIG_ALLOW_CROSS=1 OPENSSL_NO_PKG_CONFIG=1 CODEX_SKIP_VENDORED_BWRAP=1
+          eval "$(python3 scripts/fetch_rusty_v8_android.py | grep '^export ' | sed 's/^export //')"
+          export RUSTY_V8_ARCHIVE RUSTY_V8_SRC_BINDING_PATH
+          python3 scripts/check_v8_sandbox.py "${RUSTY_V8_ARCHIVE}"
+          export CC_aarch64_linux_android=aarch64-linux-android29-clang
+          export CXX_aarch64_linux_android=aarch64-linux-android29-clang++
+          export AR_aarch64_linux_android=llvm-ar RANLIB_aarch64_linux_android=llvm-ranlib
+          builtins="$(find "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64" -name libclang_rt.builtins-aarch64-android.a -print -quit)"
+          test -n "${builtins}"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-Clink-arg=-lc++_shared -Clink-arg=-Wl,-rpath,\$ORIGIN -Clink-arg=${builtins}"
+          cd codex-rs
+          rustup run 1.95.0 cargo build --locked --target aarch64-linux-android --release -p codex-cli -p codex-code-mode-host
+      - name: Package separate executor candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir native-executor-artifact
+          cp native-executor-source/codex-rs/target/aarch64-linux-android/release/codex native-executor-artifact/codex-executor
+          cp native-executor-source/codex-rs/target/aarch64-linux-android/release/codex-code-mode-host native-executor-artifact/
+          cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" native-executor-artifact/
+          "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all native-executor-artifact/codex-executor native-executor-artifact/codex-code-mode-host native-executor-artifact/libc++_shared.so
+          cp native-executor/source-freeze.json native-executor/retention.patch native-executor-artifact/
+          python3 native-executor/write-build-manifest.py native-executor-artifact
+          tar -czf native-executor-android-arm64.tar.gz native-executor-artifact
+          sha256sum native-executor-android-arm64.tar.gz > native-executor-android-arm64.tar.gz.sha256
+      - name: Upload candidate; no install or package replacement
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: native-executor-android-arm64-${{ github.sha }}
+          path: |
+            native-executor-android-arm64.tar.gz
+            native-executor-android-arm64.tar.gz.sha256
+          if-no-files-found: error

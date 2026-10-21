@@ -1,0 +1,818 @@
+diff --git a/codex-rs/cli/src/exec_server_command.rs b/codex-rs/cli/src/exec_server_command.rs
+index 568ceaf..0e949a8 100644
+--- a/codex-rs/cli/src/exec_server_command.rs
++++ b/codex-rs/cli/src/exec_server_command.rs
+@@ -3,6 +3,7 @@
+ //! Transport, configuration, authentication, and shutdown are kept together.
+ 
+ use std::sync::Arc;
++use std::time::Duration;
+ 
+ use clap::Parser;
+ use codex_arg0::Arg0DispatchPaths;
+@@ -58,6 +59,17 @@ pub(super) struct ExecServerCommand {
+     )]
+     proxy_private_ips_via_upstream: bool,
+ 
++    /// Detached-session retention in seconds. Zero (default) disables automatic expiry.
++    /// Explicit session/close and executor shutdown still end retained sessions.
++    #[arg(
++        long,
++        env = "CODEX_EXEC_SERVER_DETACHED_SESSION_RETENTION_SECS",
++        default_value_t = 0,
++        value_name = "SECONDS",
++        global = true
++    )]
++    detached_session_retention_secs: u64,
++
+     /// Maximum number of requests to process concurrently on each connection.
+     #[arg(
+         long = "concurrent-requests",
+@@ -179,7 +191,11 @@ impl ExecServerCommand {
+             arg0_paths.codex_linux_sandbox_exe.clone(),
+         )?
+         .with_linux_sandbox_pid_namespace(self.linux_sandbox_pid_namespace)
+-        .with_proxy_private_ips_via_upstream(self.proxy_private_ips_via_upstream);
++        .with_proxy_private_ips_via_upstream(self.proxy_private_ips_via_upstream)
++        .with_detached_session_retention(
++            (self.detached_session_retention_secs != 0)
++                .then(|| Duration::from_secs(self.detached_session_retention_secs)),
++        )?;
+         // Config loading below owns error handling (non-strict stdio can proceed
+         // without config). Never retain other startup flags in the executor.
+         if let Ok(overrides) = root_config_overrides.parse_overrides() {
+@@ -505,3 +521,47 @@ async fn load_exec_server_remote_auth(
+ 
+     Ok((auth_manager, auth))
+ }
++
++#[cfg(test)]
++mod retention_tests {
++    use super::*;
++    use clap::CommandFactory;
++
++    #[test]
++    fn retention_cli_defaults_to_unlimited_and_accepts_explicit_duration() {
++        let command = ExecServerCommand::command();
++        let argument = command
++            .get_arguments()
++            .find(|argument| argument.get_id() == "detached_session_retention_secs")
++            .unwrap();
++        assert_eq!(argument.get_default_values().len(), 1);
++        assert_eq!(argument.get_default_values()[0].to_str(), Some("0"));
++        assert_eq!(
++            argument.get_env().unwrap().to_str(),
++            Some("CODEX_EXEC_SERVER_DETACHED_SESSION_RETENTION_SECS")
++        );
++        for seconds in [0, 300] {
++            let command = ExecServerCommand::try_parse_from([
++                "exec-server",
++                "--detached-session-retention-secs",
++                &seconds.to_string(),
++            ])
++            .unwrap();
++            assert_eq!(seconds, command.detached_session_retention_secs);
++        }
++    }
++
++    #[test]
++    fn retention_cli_rejects_negative_or_malformed_values() {
++        for value in ["-1", "forever", "1.5"] {
++            assert!(
++                ExecServerCommand::try_parse_from([
++                    "exec-server",
++                    "--detached-session-retention-secs",
++                    value,
++                ])
++                .is_err()
++            );
++        }
++    }
++}
+diff --git a/codex-rs/exec-server-protocol/src/protocol.rs b/codex-rs/exec-server-protocol/src/protocol.rs
+index 62d901e..c4ba1fd 100644
+--- a/codex-rs/exec-server-protocol/src/protocol.rs
++++ b/codex-rs/exec-server-protocol/src/protocol.rs
+@@ -22,6 +22,8 @@ use crate::ProcessId;
+ 
+ pub const INITIALIZE_METHOD: &str = "initialize";
+ pub const INITIALIZED_METHOD: &str = "initialized";
++/// Explicitly ends the caller's attached session; disconnect alone retains it.
++pub const SESSION_CLOSE_METHOD: &str = "session/close";
+ pub const EXEC_METHOD: &str = "process/start";
+ pub const EXEC_READ_METHOD: &str = "process/read";
+ pub const EXEC_WRITE_METHOD: &str = "process/write";
+@@ -101,6 +103,13 @@ pub struct InitializeResponse {
+     pub environment_info: Option<EnvironmentInfo>,
+ }
+ 
++/// Close only the session attached to this connection, not an arbitrary session ID.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct SessionCloseParams {}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct SessionCloseResponse {}
++
+ /// Information about an execution/filesystem environment.
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "camelCase")]
+diff --git a/codex-rs/exec-server/README.md b/codex-rs/exec-server/README.md
+index fc4419a..a02b089 100644
+--- a/codex-rs/exec-server/README.md
++++ b/codex-rs/exec-server/README.md
+@@ -178,8 +178,24 @@ enable concurrent processing.
+ If the server receives any notification other than `initialized`, it replies
+ with an error using request id `-1`.
+ 
+-If the websocket connection closes, the server terminates any remaining managed
+-processes for that client connection.
++When a WebSocket connection closes, its process session is detached. This personal
++build retains detached sessions and managed processes without automatic expiry by
++default. Reconnect with `initialize.resumeSessionId` to attach to that same session.
++An already attached session rejects a second attachment; unknown or expired IDs
++are errors and never silently create a replacement.
++
++Use `--detached-session-retention-secs N` or
++`CODEX_EXEC_SERVER_DETACHED_SESSION_RETENTION_SECS=N` to opt into finite retention.
++Zero is the persistent default and disables automatic expiry; positive values
++expire a session after that many detached seconds. Resuming and detaching again
++starts a new finite interval. The setting is captured when a session is created.
++
++Send `session/close` to explicitly end a session. Probe clients that initialize a
++temporary session must close it and wait for the response before disconnecting.
++Executor shutdown/restart still ends all in-memory sessions and managed processes;
++this policy does not persist them across executor process death. Stdio serves one
++connection and shuts its registry down on EOF, so stdio sessions cannot resume.
++Detached process output retains its existing buffering limits.
+ 
+ ## API
+ 
+@@ -229,6 +245,25 @@ caches `environment/info`.
+ Handshake acknowledgement notification sent by the client after a successful
+ `initialize` response.
+ 
++### `session/close` (personal executor extension)
++
++After `initialize` and `initialized`, send a request with `{}` params:
++
++```json
++{"id": 9, "method": "session/close", "params": {}}
++```
++
++The response is `{"id":9,"result":{}}`. It removes only the session attached to
++that connection, terminates its managed processes and closes its connection-local
++resources. It accepts no target session ID and cannot close another connection's
++session. Concurrent queued/in-flight RPC work is canceled before closing. After
++the response, disconnect; the session ID is terminal and cannot be resumed.
++
++This method is additive: the existing initialize wire shape is unchanged. Older
++executors return JSON-RPC `-32601`; clients must report unsupported cleanup rather
++than claim the session was closed. A missing response has an unknown outcome and
++must not cause command replay or a new session.
++
+ Params are currently ignored. Sending any other notification method is treated
+ as an invalid request.
+ 
+diff --git a/codex-rs/exec-server/src/runtime_options.rs b/codex-rs/exec-server/src/runtime_options.rs
+index e3146c6..8e0bd70 100644
+--- a/codex-rs/exec-server/src/runtime_options.rs
++++ b/codex-rs/exec-server/src/runtime_options.rs
+@@ -1,6 +1,7 @@
+ //! Executor-local paths and trusted startup settings used when preparing execution.
+ 
+ use std::path::PathBuf;
++use std::time::Duration;
+ 
+ use codex_sandboxing::LinuxSandboxPidNamespace;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+@@ -19,6 +20,8 @@ pub struct ExecServerRuntimeOptions {
+     pub proxy_private_ips_via_upstream: bool,
+     /// Only the sandbox preference from CLI flags, never other startup config or secrets.
+     pub prefer_mxc: Option<bool>,
++    /// Detached process sessions have no automatic expiry unless explicitly configured.
++    pub(crate) detached_session_retention: Option<Duration>,
+     /// User-config opt-out of writable-root symlink checks beneath this host's home.
+     #[cfg(target_os = "macos")]
+     pub allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
+@@ -46,6 +49,7 @@ impl ExecServerRuntimeOptions {
+             linux_sandbox_pid_namespace: LinuxSandboxPidNamespace::default(),
+             proxy_private_ips_via_upstream: false,
+             prefer_mxc: None,
++            detached_session_retention: None,
+             codex_self_exe: absolute_path(codex_self_exe)?,
+             codex_linux_sandbox_exe: codex_linux_sandbox_exe.map(absolute_path).transpose()?,
+             #[cfg(target_os = "macos")]
+@@ -53,6 +57,23 @@ impl ExecServerRuntimeOptions {
+         })
+     }
+ 
++    /// Sets an optional detached-session expiry. None retains sessions until explicit close/shutdown.
++    pub fn with_detached_session_retention(
++        mut self,
++        retention: Option<Duration>,
++    ) -> std::io::Result<Self> {
++        if retention
++            .is_some_and(|duration| std::time::Instant::now().checked_add(duration).is_none())
++        {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                "detached session retention exceeds the platform clock range",
++            ));
++        }
++        self.detached_session_retention = retention;
++        Ok(self)
++    }
++
+     /// Applies the PID namespace policy chosen by trusted executor provisioning.
+     pub fn with_linux_sandbox_pid_namespace(mut self, mode: LinuxSandboxPidNamespace) -> Self {
+         self.linux_sandbox_pid_namespace = mode;
+@@ -80,3 +101,40 @@ fn absolute_path(path: PathBuf) -> std::io::Result<AbsolutePathBuf> {
+     AbsolutePathBuf::from_absolute_path(path.as_path())
+         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+ }
++
++#[cfg(test)]
++mod retention_tests {
++    use super::*;
++
++    #[test]
++    fn default_is_unlimited_and_finite_retention_is_explicit() {
++        let options =
++            ExecServerRuntimeOptions::new(std::env::current_exe().unwrap(), None).unwrap();
++        assert_eq!(options.detached_session_retention, None);
++        let options = options
++            .with_detached_session_retention(Some(Duration::from_secs(300)))
++            .unwrap();
++        assert_eq!(
++            options.detached_session_retention,
++            Some(Duration::from_secs(300))
++        );
++        assert_eq!(
++            options
++                .with_detached_session_retention(None)
++                .unwrap()
++                .detached_session_retention,
++            None
++        );
++    }
++
++    #[test]
++    fn unrepresentable_duration_is_rejected_at_startup() {
++        let options =
++            ExecServerRuntimeOptions::new(std::env::current_exe().unwrap(), None).unwrap();
++        assert!(
++            options
++                .with_detached_session_retention(Some(Duration::MAX))
++                .is_err()
++        );
++    }
++}
+diff --git a/codex-rs/exec-server/src/server/handler.rs b/codex-rs/exec-server/src/server/handler.rs
+index d4ecb1b..dbf8fdd 100644
+--- a/codex-rs/exec-server/src/server/handler.rs
++++ b/codex-rs/exec-server/src/server/handler.rs
+@@ -60,6 +60,7 @@ use crate::protocol::InitializeParams;
+ use crate::protocol::InitializeResponse;
+ use crate::protocol::ReadParams;
+ use crate::protocol::ReadResponse;
++use crate::protocol::SessionCloseResponse;
+ use crate::protocol::SignalParams;
+ use crate::protocol::SignalResponse;
+ use crate::protocol::TerminateParams;
+@@ -115,13 +116,24 @@ impl ExecServerHandler {
+     }
+ 
+     pub(crate) async fn shutdown(&self) {
++        self.shutdown_connection_resources().await;
++        if let Some(session) = self.session() {
++            session.detach().await;
++        }
++    }
++
++    async fn shutdown_connection_resources(&self) {
+         self.background_task_shutdown.cancel();
+         self.background_tasks.close();
+         self.background_tasks.wait().await;
+         self.file_system.shutdown().await;
+-        if let Some(session) = self.session() {
+-            session.detach().await;
+-        }
++    }
++
++    pub(crate) async fn session_close(&self) -> Result<SessionCloseResponse, JSONRPCErrorError> {
++        let session = self.require_initialized_for("session")?;
++        session.close().await?;
++        self.shutdown_connection_resources().await;
++        Ok(SessionCloseResponse {})
+     }
+ 
+     pub(crate) fn is_session_attached(&self) -> bool {
+diff --git a/codex-rs/exec-server/src/server/handler/tests.rs b/codex-rs/exec-server/src/server/handler/tests.rs
+index 00de894..8553c14 100644
+--- a/codex-rs/exec-server/src/server/handler/tests.rs
++++ b/codex-rs/exec-server/src/server/handler/tests.rs
+@@ -110,6 +110,98 @@ async fn initialized_handler() -> Arc<ExecServerHandler> {
+     handler
+ }
+ 
++#[tokio::test]
++async fn retention_session_close_cleans_one_session_and_preserves_another() {
++    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
++    let (first_tx, _first_rx) = mpsc::channel(32);
++    let first = ExecServerHandler::new(
++        Arc::clone(&registry),
++        RpcNotificationSender::new(first_tx),
++        test_runtime_paths(),
++        test_http_client_factory(),
++    );
++    let initialized = first
++        .initialize(InitializeParams {
++            client_name: "probe".to_string(),
++            resume_session_id: None,
++        })
++        .await
++        .unwrap();
++    first.initialized().unwrap();
++    first
++        .exec(
++            exec_params_with_argv(
++                "closed-process",
++                shell_argv("sleep 60", "ping -n 61 127.0.0.1 >NUL"),
++            ),
++            None,
++        )
++        .await
++        .unwrap();
++    let (other_tx, _other_rx) = mpsc::channel(32);
++    let other = ExecServerHandler::new(
++        Arc::clone(&registry),
++        RpcNotificationSender::new(other_tx),
++        test_runtime_paths(),
++        test_http_client_factory(),
++    );
++    other
++        .initialize(InitializeParams {
++            client_name: "personal".to_string(),
++            resume_session_id: None,
++        })
++        .await
++        .unwrap();
++    other.initialized().unwrap();
++    other
++        .exec(
++            exec_params_with_argv(
++                "retained-process",
++                shell_argv("sleep 60", "ping -n 61 127.0.0.1 >NUL"),
++            ),
++            None,
++        )
++        .await
++        .unwrap();
++    first.session_close().await.unwrap();
++    assert!(!first.is_session_attached());
++    assert!(first.environment_info().is_err());
++    let (resume_tx, _resume_rx) = mpsc::channel(16);
++    let resume = ExecServerHandler::new(
++        Arc::clone(&registry),
++        RpcNotificationSender::new(resume_tx),
++        test_runtime_paths(),
++        test_http_client_factory(),
++    );
++    assert!(
++        resume
++            .initialize(InitializeParams {
++                client_name: "closed-resume".to_string(),
++                resume_session_id: Some(initialized.session_id),
++            })
++            .await
++            .unwrap_err()
++            .message
++            .contains("unknown session id")
++    );
++    let running = other
++        .exec_read(ReadParams {
++            process_id: ProcessId::from("retained-process"),
++            after_seq: None,
++            max_bytes: None,
++            wait_ms: Some(0),
++        })
++        .await
++        .unwrap();
++    assert!(!running.exited);
++    assert!(!running.closed);
++    assert!(running.failure.is_none());
++    other.session_close().await.unwrap();
++    first.shutdown().await;
++    other.shutdown().await;
++    registry.shutdown().await;
++}
++
+ #[tokio::test]
+ async fn duplicate_process_ids_allow_only_one_successful_start() {
+     let handler = initialized_handler().await;
+diff --git a/codex-rs/exec-server/src/server/registry.rs b/codex-rs/exec-server/src/server/registry.rs
+index 609a3a7..0096764 100644
+--- a/codex-rs/exec-server/src/server/registry.rs
++++ b/codex-rs/exec-server/src/server/registry.rs
+@@ -38,6 +38,8 @@ use crate::protocol::INITIALIZED_METHOD;
+ use crate::protocol::InitializeParams;
+ use crate::protocol::JSONRPCErrorError;
+ use crate::protocol::ReadParams;
++use crate::protocol::SESSION_CLOSE_METHOD;
++use crate::protocol::SessionCloseParams;
+ use crate::protocol::SignalParams;
+ use crate::protocol::TerminateParams;
+ use crate::protocol::WireCapabilityRootsDiscoverParams;
+@@ -72,6 +74,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
+             handler.initialize(params).await
+         },
+     );
++    router.request(
++        SESSION_CLOSE_METHOD,
++        |handler: Arc<ExecServerHandler>, _params: SessionCloseParams| async move {
++            handler.session_close().await
++        },
++    );
+     router.request_with_id(
+         HTTP_REQUEST_METHOD,
+         |handler: Arc<ExecServerHandler>, request_id, params: HttpRequestParams| async move {
+diff --git a/codex-rs/exec-server/src/server/request_dispatcher.rs b/codex-rs/exec-server/src/server/request_dispatcher.rs
+index cc78c24..c2527c1 100644
+--- a/codex-rs/exec-server/src/server/request_dispatcher.rs
++++ b/codex-rs/exec-server/src/server/request_dispatcher.rs
+@@ -24,6 +24,7 @@ use crate::protocol::EXEC_TERMINATE_METHOD;
+ use crate::protocol::FS_CLOSE_METHOD;
+ use crate::protocol::INITIALIZE_METHOD;
+ use crate::protocol::INITIALIZED_METHOD;
++use crate::protocol::SESSION_CLOSE_METHOD;
+ use crate::rpc::RpcCallError;
+ use crate::rpc::RpcRouter;
+ use crate::rpc::RpcServerOutboundMessage;
+@@ -282,6 +283,13 @@ impl RequestDispatcher {
+             RequestTaskResult::Completed
+         };
+ 
++        if method == SESSION_CLOSE_METHOD {
++            // End in-flight/queued work before closing the session, as on transport shutdown.
++            self.tasks.abort_all();
++            while self.tasks.join_next().await.is_some() {}
++            return task.await;
++        }
++
+         let Some(RequestLanes { ordinary, control }) = &self.lanes else {
+             // Keep requests ordered when concurrent dispatch is not enabled.
+             return task.await;
+diff --git a/codex-rs/exec-server/src/server/session_registry.rs b/codex-rs/exec-server/src/server/session_registry.rs
+index d7c7b1c..816eae0 100644
+--- a/codex-rs/exec-server/src/server/session_registry.rs
++++ b/codex-rs/exec-server/src/server/session_registry.rs
+@@ -14,11 +14,6 @@ use crate::rpc::session_already_attached;
+ use crate::server::process_handler::ProcessHandler;
+ use crate::telemetry::ExecServerTelemetry;
+ 
+-#[cfg(test)]
+-const DETACHED_SESSION_TTL: Duration = Duration::from_millis(200);
+-#[cfg(not(test))]
+-const DETACHED_SESSION_TTL: Duration = Duration::from_secs(30);
+-
+ pub(crate) struct SessionRegistry {
+     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+     telemetry: ExecServerTelemetry,
+@@ -27,6 +22,7 @@ pub(crate) struct SessionRegistry {
+ struct SessionEntry {
+     session_id: String,
+     process: ProcessHandler,
++    detached_session_retention: Option<Duration>,
+     attachment: StdMutex<AttachmentState>,
+ }
+ 
+@@ -36,8 +32,9 @@ enum AttachmentState {
+     },
+     Detached {
+         connection_id: ConnectionId,
+-        expires_at: tokio::time::Instant,
++        expires_at: Option<tokio::time::Instant>,
+     },
++    Closed,
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -104,6 +101,7 @@ impl SessionRegistry {
+                 let session_id = Uuid::new_v4().to_string();
+                 let entry = Arc::new(SessionEntry::new(
+                     session_id.clone(),
++                    runtime_paths.detached_session_retention,
+                     ProcessHandler::new(notifications, self.telemetry.clone(), runtime_paths),
+                     connection_id,
+                 ));
+@@ -133,8 +131,13 @@ impl SessionRegistry {
+         }
+     }
+ 
+-    async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
+-        tokio::time::sleep(DETACHED_SESSION_TTL).await;
++    async fn expire_if_detached(
++        &self,
++        session_id: String,
++        connection_id: ConnectionId,
++        retention: Duration,
++    ) {
++        tokio::time::sleep(retention).await;
+ 
+         let removed = {
+             let mut sessions = self.sessions.lock().await;
+@@ -163,10 +166,16 @@ impl Default for SessionRegistry {
+ }
+ 
+ impl SessionEntry {
+-    fn new(session_id: String, process: ProcessHandler, connection_id: ConnectionId) -> Self {
++    fn new(
++        session_id: String,
++        detached_session_retention: Option<Duration>,
++        process: ProcessHandler,
++        connection_id: ConnectionId,
++    ) -> Self {
+         Self {
+             session_id,
+             process,
++            detached_session_retention,
+             attachment: StdMutex::new(AttachmentState::Attached { connection_id }),
+         }
+     }
+@@ -192,11 +201,27 @@ impl SessionEntry {
+         self.process.set_notification_sender(/*notifications*/ None);
+         *attachment = AttachmentState::Detached {
+             connection_id,
+-            expires_at: tokio::time::Instant::now() + DETACHED_SESSION_TTL,
++            expires_at: self
++                .detached_session_retention
++                .map(|retention| tokio::time::Instant::now() + retention),
+         };
+         true
+     }
+ 
++    fn close(&self, connection_id: ConnectionId) -> bool {
++        let mut attachment = self
++            .attachment
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        if !matches!(*attachment, AttachmentState::Attached { connection_id: current } if current == connection_id)
++        {
++            return false;
++        }
++        *attachment = AttachmentState::Closed;
++        self.process.set_notification_sender(None);
++        true
++    }
++
+     fn has_active_connection(&self) -> bool {
+         matches!(
+             *self
+@@ -216,7 +241,7 @@ impl SessionEntry {
+     fn is_expired(&self, now: tokio::time::Instant) -> bool {
+         matches!(*self.attachment
+             .lock()
+-            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at, .. } if now >= expires_at)
++            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at: Some(expires_at), .. } if now >= expires_at)
+     }
+ 
+     fn is_detached_connection_expired(
+@@ -228,7 +253,7 @@ impl SessionEntry {
+             .attachment
+             .lock()
+             .unwrap_or_else(std::sync::PoisonError::into_inner);
+-        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at } if detached == connection_id && now >= expires_at)
++        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at: Some(expires_at) } if detached == connection_id && now >= expires_at)
+     }
+ }
+ 
+@@ -249,16 +274,156 @@ impl SessionHandle {
+         &self.entry.process
+     }
+ 
++    pub(crate) async fn close(&self) -> Result<(), JSONRPCErrorError> {
++        {
++            let mut sessions = self.registry.sessions.lock().await;
++            let current = sessions.get(self.session_id()).is_some_and(|entry| {
++                Arc::ptr_eq(entry, &self.entry) && entry.close(self.connection_id)
++            });
++            if !current {
++                return Err(invalid_request("session is no longer attached".to_string()));
++            }
++            sessions.remove(self.session_id());
++        }
++        // Like executor shutdown, terminate the managed processes without ending other sessions.
++        self.entry.process.shutdown().await;
++        Ok(())
++    }
++
+     pub(crate) async fn detach(&self) {
+         if !self.entry.detach(self.connection_id) {
+             return;
+         }
++        let Some(retention) = self.entry.detached_session_retention else {
++            return;
++        };
+ 
+         let registry = Arc::clone(&self.registry);
+         let session_id = self.entry.session_id.clone();
+         let connection_id = self.connection_id;
+         tokio::spawn(async move {
+-            registry.expire_if_detached(session_id, connection_id).await;
++            registry
++                .expire_if_detached(session_id, connection_id, retention)
++                .await;
+         });
+     }
+ }
++
++#[cfg(test)]
++mod retention_tests {
++    use super::*;
++    use tokio::sync::mpsc;
++
++    async fn attach(
++        registry: &Arc<SessionRegistry>,
++        resume: Option<String>,
++        retention: Option<Duration>,
++    ) -> Result<SessionHandle, JSONRPCErrorError> {
++        let (sender, _receiver) = mpsc::channel(16);
++        let runtime = ExecServerRuntimeOptions::new(std::env::current_exe().unwrap(), None)
++            .unwrap()
++            .with_detached_session_retention(retention)
++            .unwrap();
++        registry
++            .attach(resume, RpcNotificationSender::new(sender), runtime)
++            .await
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn unlimited_retention_resumes_the_same_entry_after_an_hour() {
++        let registry = SessionRegistry::default();
++        let registry = Arc::new(registry);
++        let first = attach(&registry, None, None).await.unwrap();
++        let id = first.session_id().to_string();
++        first.detach().await;
++        tokio::time::advance(Duration::from_secs(3_600)).await;
++        let resumed = attach(&registry, Some(id.clone()), None).await.unwrap();
++        assert_eq!(id, resumed.session_id());
++        assert!(Arc::ptr_eq(&first.entry, &resumed.entry));
++        assert!(!first.is_session_attached());
++        assert!(resumed.is_session_attached());
++        registry.shutdown().await;
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn explicit_finite_retention_expires_instead_of_creating_a_new_session() {
++        let registry = SessionRegistry::new(ExecServerTelemetry::default());
++        let session = attach(&registry, None, Some(Duration::from_secs(2)))
++            .await
++            .unwrap();
++        let id = session.session_id().to_string();
++        session.detach().await;
++        tokio::task::yield_now().await;
++        tokio::time::advance(Duration::from_secs(3)).await;
++        tokio::task::yield_now().await;
++        assert!(registry.sessions.lock().await.is_empty());
++        let error = attach(&registry, Some(id), None).await.err().unwrap();
++        assert!(error.message.contains("unknown session id"));
++        assert!(registry.sessions.lock().await.is_empty());
++    }
++
++    #[tokio::test(start_paused = true)]
++    async fn old_expiry_timer_does_not_remove_a_new_attachment_or_detachment() {
++        let registry = SessionRegistry::new(ExecServerTelemetry::default());
++        let first = attach(&registry, None, Some(Duration::from_secs(2)))
++            .await
++            .unwrap();
++        let id = first.session_id().to_string();
++        first.detach().await;
++        tokio::task::yield_now().await;
++        tokio::time::advance(Duration::from_secs(1)).await;
++        let second = attach(&registry, Some(id.clone()), None).await.unwrap();
++        second.detach().await;
++        tokio::task::yield_now().await;
++        tokio::time::advance(Duration::from_millis(1_500)).await;
++        tokio::task::yield_now().await;
++        assert!(registry.sessions.lock().await.contains_key(&id));
++        tokio::time::advance(Duration::from_secs(1)).await;
++        tokio::task::yield_now().await;
++        assert!(registry.sessions.lock().await.is_empty());
++    }
++
++    #[tokio::test]
++    async fn explicit_close_removes_only_the_callers_session() {
++        let registry = SessionRegistry::new(ExecServerTelemetry::default());
++        let first = attach(&registry, None, None).await.unwrap();
++        let other = attach(&registry, None, None).await.unwrap();
++        first.close().await.unwrap();
++        assert!(!first.is_session_attached());
++        assert!(other.is_session_attached());
++        assert_eq!(1, registry.sessions.lock().await.len());
++        first.detach().await; // Transport cleanup must not retain or recreate the closed entry.
++        let result = attach(&registry, Some(first.session_id().to_string()), None).await;
++        assert!(result.err().unwrap().message.contains("unknown session id"));
++        other.close().await.unwrap();
++        assert!(registry.sessions.lock().await.is_empty());
++    }
++
++    #[tokio::test]
++    async fn stale_connection_cannot_close_the_resumed_session() {
++        let registry = SessionRegistry::new(ExecServerTelemetry::default());
++        let first = attach(&registry, None, None).await.unwrap();
++        first.detach().await;
++        let resumed = attach(&registry, Some(first.session_id().to_string()), None)
++            .await
++            .unwrap();
++        assert!(first.close().await.is_err());
++        assert!(resumed.is_session_attached());
++        assert_eq!(1, registry.sessions.lock().await.len());
++        resumed.close().await.unwrap();
++    }
++
++    #[tokio::test]
++    async fn executor_shutdown_removes_even_unlimited_detached_sessions() {
++        let registry = SessionRegistry::new(ExecServerTelemetry::default());
++        let first = attach(&registry, None, None).await.unwrap();
++        first.detach().await;
++        registry.shutdown().await;
++        assert!(registry.sessions.lock().await.is_empty());
++        assert!(
++            attach(&registry, Some(first.session_id().to_string()), None)
++                .await
++                .is_err()
++        );
++    }
++}
+diff --git a/codex-rs/exec-server/tests/process.rs b/codex-rs/exec-server/tests/process.rs
+index a82bcbc..fdcbb20 100644
+--- a/codex-rs/exec-server/tests/process.rs
++++ b/codex-rs/exec-server/tests/process.rs
+@@ -26,6 +26,67 @@ use pretty_assertions::assert_eq;
+ use tokio::time::sleep;
+ use tokio::time::timeout;
+ 
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn retention_close_probe_session_over_websocket() -> anyhow::Result<()> {
++    let mut server = exec_server().await?;
++    let initialize_id = server
++        .send_request(
++            "initialize",
++            serde_json::json!({ "clientName": "temporary-probe" }),
++        )
++        .await?;
++    let initialized = server
++        .wait_for_event(|event| {
++            matches!(event, JSONRPCMessage::Response(JSONRPCResponse { id, .. })
++                | JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &initialize_id)
++        })
++        .await?;
++    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = initialized else {
++        anyhow::bail!("expected initialize response, got {initialized:?}");
++    };
++    let initialized: InitializeResponse = serde_json::from_value(result)?;
++    server
++        .send_notification("initialized", serde_json::json!({}))
++        .await?;
++    let close_id = server
++        .send_request("session/close", serde_json::json!({}))
++        .await?;
++    let closed = server
++        .wait_for_event(|event| {
++            matches!(event, JSONRPCMessage::Response(JSONRPCResponse { id, .. })
++                | JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &close_id)
++        })
++        .await?;
++    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = closed else {
++        anyhow::bail!("expected session/close response, got {closed:?}");
++    };
++    assert_eq!(result, serde_json::json!({}));
++    server.disconnect_websocket().await?;
++    server.reconnect_websocket().await?;
++    let resume_id = server
++        .send_request(
++            "initialize",
++            serde_json::json!({
++                "clientName": "closed-probe",
++                "resumeSessionId": initialized.session_id
++            }),
++        )
++        .await?;
++    let resumed = server
++        .wait_for_event(|event| {
++            matches!(event, JSONRPCMessage::Response(JSONRPCResponse { id, .. })
++                | JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &resume_id)
++        })
++        .await?;
++    let JSONRPCMessage::Error(JSONRPCError { error, .. }) = resumed else {
++        anyhow::bail!("closed session must not resume, got {resumed:?}");
++    };
++    assert_eq!(error.code, -32600);
++    assert!(error.message.contains("unknown session id"));
++    server.shutdown().await?;
++    Ok(())
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
+     let mut server = exec_server().await?;
