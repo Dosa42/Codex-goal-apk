@@ -64,7 +64,7 @@ class NativeIdentityStateTest {
     @Before fun setup() {
         service=Robolectric.buildService(AiPhoneAccessibilityService::class.java).create().get()
         receipts=ActionReceipts(service);queue=LinkedBlockingQueue()
-        set("socket",Socket());set("outbound",queue);set("receipts",receipts);set("epoch","regression-epoch")
+        set("socket",Socket());set("protocolReady",true);set("outbound",queue);set("receipts",receipts);set("epoch","regression-epoch")
         set("observationClock", { clockReads++; clockMillis+=1000; java.time.Instant.ofEpochMilli(clockMillis).toString() })
         window=AccessibilityWindowInfo.obtain()
         shadowOf(window).setId(7);shadowOf(window).setDisplayId(0)

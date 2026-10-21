@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ai-phone/1",
+  "$id": "ai-phone/2",
   "title": "AI-phone complete native and public operation contract",
   "description": "Discriminated native NDJSON frames and typed public executor file operations. No content/node/depth/frame ceilings. Runtime also checks matching IDs/scopes, advertised action support, current service/revision and durable request identity.",
   "oneOf": [
@@ -643,7 +643,9 @@
               "launch",
               "act",
               "files",
-              "watch"
+              "watch",
+              "power",
+              "home"
             ]
           }
         },
@@ -670,12 +672,20 @@
             },
             "global": {
               "type": "boolean"
+            },
+            "power": {
+              "const": false
+            },
+            "home": {
+              "type": "boolean"
             }
           },
           "required": [
             "node",
             "launch",
-            "global"
+            "global",
+            "power",
+            "home"
           ],
           "additionalProperties": true
         },
@@ -700,6 +710,12 @@
         },
         "observedAt": {
           "type": "string"
+        },
+        "power": {
+          "$ref": "#/$defs/powerCapability"
+        },
+        "home": {
+          "$ref": "#/$defs/homeCapability"
         }
       },
       "required": [
@@ -707,7 +723,9 @@
         "nodeActions",
         "globalActions",
         "displayTargeting",
-        "limitations"
+        "limitations",
+        "power",
+        "home"
       ],
       "additionalProperties": true
     },
@@ -1111,6 +1129,9 @@
               "properties": {},
               "required": [],
               "additionalProperties": false
+            },
+            "scope": {
+              "const": "device"
             }
           },
           "required": [
@@ -1119,7 +1140,8 @@
             "revision",
             "displayId",
             "action",
-            "args"
+            "args",
+            "scope"
           ],
           "additionalProperties": false
         }
@@ -1294,7 +1316,7 @@
           "const": "https://json-schema.org/draft/2020-12/schema"
         },
         "$id": {
-          "const": "ai-phone/1"
+          "const": "ai-phone/2"
         },
         "$defs": {
           "type": "object"
@@ -1309,7 +1331,7 @@
       "type": "object",
       "properties": {
         "protocol": {
-          "const": "ai-phone/1"
+          "const": "ai-phone/2"
         },
         "schema": {
           "$ref": "#/$defs/machineSchema"
@@ -1714,6 +1736,12 @@
         },
         {
           "$ref": "#/$defs/fileRenameParams"
+        },
+        {
+          "$ref": "#/$defs/fileMkdirParams"
+        },
+        {
+          "$ref": "#/$defs/fileRemoveParams"
         }
       ]
     },
@@ -1806,7 +1834,9 @@
                 "edit",
                 "copy",
                 "move",
-                "rename"
+                "rename",
+                "mkdir",
+                "remove"
               ]
             },
             "requestId": {
@@ -1895,6 +1925,15 @@
             },
             {
               "$ref": "#/$defs/fileParams"
+            },
+            {
+              "$ref": "#/$defs/powerAcquireParams"
+            },
+            {
+              "$ref": "#/$defs/powerReleaseParams"
+            },
+            {
+              "$ref": "#/$defs/homeParams"
             }
           ]
         },
@@ -2276,6 +2315,12 @@
         },
         {
           "$ref": "#/$defs/actRequest"
+        },
+        {
+          "$ref": "#/$defs/powerRequest"
+        },
+        {
+          "$ref": "#/$defs/homeRequest"
         }
       ]
     },
@@ -2298,6 +2343,12 @@
         },
         {
           "$ref": "#/$defs/actResponse"
+        },
+        {
+          "$ref": "#/$defs/powerResponse"
+        },
+        {
+          "$ref": "#/$defs/homeResponse"
         }
       ]
     },
@@ -2338,7 +2389,7 @@
           "const": "hello"
         },
         "protocol": {
-          "const": "ai-phone/1"
+          "const": "ai-phone/2"
         },
         "serviceInstanceId": {
           "type": "string",
@@ -2370,7 +2421,7 @@
           "const": "helloAck"
         },
         "protocol": {
-          "const": "ai-phone/1"
+          "const": "ai-phone/2"
         },
         "brokerInstanceId": {
           "type": "string",
@@ -2510,6 +2561,9 @@
         },
         {
           "$ref": "#/$defs/statusEvent"
+        },
+        {
+          "$ref": "#/$defs/powerEvent"
         }
       ]
     },
@@ -2539,6 +2593,610 @@
         "result"
       ],
       "additionalProperties": false
+    },
+    "powerCapability": {
+      "type": "object",
+      "properties": {
+        "wake": {
+          "type": "boolean"
+        },
+        "hold": {
+          "type": "boolean"
+        },
+        "release": {
+          "type": "boolean"
+        },
+        "scope": {
+          "const": "device"
+        },
+        "displayTargeting": {
+          "const": false
+        },
+        "backend": {
+          "const": "android_screen_wake_lock_with_accessibility_overlay"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "holdDisplayId": {
+          "type": "integer",
+          "const": 0
+        }
+      },
+      "required": [
+        "wake",
+        "hold",
+        "release",
+        "scope",
+        "displayTargeting",
+        "backend",
+        "holdDisplayId"
+      ],
+      "additionalProperties": false
+    },
+    "powerLease": {
+      "type": "object",
+      "properties": {
+        "leaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acquiredAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deadlineAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "scope": {
+          "const": "device"
+        }
+      },
+      "required": [
+        "leaseId",
+        "owner",
+        "acquiredAt",
+        "deadlineAt",
+        "held",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "powerState": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "const": "android_power"
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "processInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "const": "device"
+        },
+        "displayTargeting": {
+          "const": false
+        },
+        "backend": {
+          "const": "android_screen_wake_lock_with_accessibility_overlay"
+        },
+        "backendHeld": {
+          "type": "boolean"
+        },
+        "deviceInteractive": {
+          "type": "boolean"
+        },
+        "keyguardLocked": {
+          "type": "boolean"
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        },
+        "activeLeases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/powerLease"
+          }
+        },
+        "powerRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "holdDisplayId": {
+          "type": "integer",
+          "const": 0
+        }
+      },
+      "required": [
+        "source",
+        "observedAt",
+        "processInstanceId",
+        "powerRevision",
+        "scope",
+        "displayTargeting",
+        "backend",
+        "backendHeld",
+        "deviceInteractive",
+        "keyguardLocked",
+        "displays",
+        "activeLeases",
+        "holdDisplayId"
+      ],
+      "additionalProperties": false
+    },
+    "powerStatusParams": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "status"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    "powerAcquireParams": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "acquire"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "const": "device"
+        },
+        "deadlineAfterMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "operation",
+        "requestId",
+        "owner",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "powerReleaseParams": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "release"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "leaseId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "operation",
+        "requestId",
+        "leaseId"
+      ],
+      "additionalProperties": false
+    },
+    "powerParams": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/powerStatusParams"
+        },
+        {
+          "$ref": "#/$defs/powerAcquireParams"
+        },
+        {
+          "$ref": "#/$defs/powerReleaseParams"
+        }
+      ]
+    },
+    "powerStatusResult": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "status"
+        },
+        "state": {
+          "$ref": "#/$defs/powerState"
+        }
+      },
+      "required": [
+        "operation",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "powerMutationResult": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "enum": [
+            "acquire",
+            "release"
+          ]
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "observedOutcome": {
+          "enum": [
+            "changed",
+            "unchanged",
+            "unverified"
+          ]
+        },
+        "leaseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "before": {
+          "$ref": "#/$defs/powerState"
+        },
+        "state": {
+          "$ref": "#/$defs/powerState"
+        },
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        }
+      },
+      "required": [
+        "operation",
+        "requestId",
+        "accepted",
+        "observedOutcome",
+        "leaseId",
+        "before",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "powerResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/powerStatusResult"
+        },
+        {
+          "$ref": "#/$defs/powerMutationResult"
+        }
+      ]
+    },
+    "powerRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "power"
+        },
+        "params": {
+          "$ref": "#/$defs/powerParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "powerResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "power"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/powerResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "powerEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "event": {
+          "const": "power"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "const": "android_power"
+        },
+        "powerState": {
+          "$ref": "#/$defs/powerState"
+        }
+      },
+      "required": [
+        "type",
+        "event",
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "source",
+        "powerState"
+      ],
+      "additionalProperties": false
+    },
+    "fileMkdirParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "mkdir"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "fileRemoveParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "remove"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "homeCapability": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "displayTargeting": {
+          "const": true
+        },
+        "route": {
+          "const": "resolved_home_intent"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "available",
+        "displayTargeting",
+        "route"
+      ],
+      "additionalProperties": false
+    },
+    "homeParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayId": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "requestId",
+        "displayId"
+      ],
+      "additionalProperties": false
+    },
+    "homeResult": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "observedOutcome": {
+          "enum": [
+            "changed",
+            "unchanged",
+            "unverified"
+          ]
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "scope": {
+          "const": "requested_display"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        },
+        "componentName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "accepted",
+        "observedOutcome",
+        "packageName",
+        "displayId",
+        "scope",
+        "source",
+        "observedAt",
+        "serviceInstanceId",
+        "revision",
+        "componentName"
+      ],
+      "additionalProperties": true
+    },
+    "homeRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "home"
+        },
+        "params": {
+          "$ref": "#/$defs/homeParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "homeResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "home"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/homeResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
     }
   },
   "x-transport": {
@@ -2560,12 +3218,40 @@
     },
     "discover": {
       "$ref": "#/$defs/discoverResult"
+    },
+    "power": {
+      "params": {
+        "$ref": "#/$defs/powerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/powerResult"
+      }
+    },
+    "home": {
+      "params": {
+        "$ref": "#/$defs/homeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/homeResult"
+      }
     }
   },
   "x-runtimeValidation": [
     "Equal frame requestId and mutation params.requestId",
     "Current serviceInstanceId/revision/windowId/displayId/nodeId",
     "Advertised action availability, actual scope and matching args",
-    "Immutable durable request IDs; conflicting bodies fail; uncertain mutation never replays"
-  ]
+    "Immutable durable request IDs; conflicting bodies fail; uncertain mutation never replays",
+    "Power acquire leaseId equals original requestId; current process state is read separately from immutable historical receipt",
+    "Power scope is device/global; display-targeted wake parameters fail; no default lease expiry or hidden cap",
+    "Power event observedAt equals exact powerState.observedAt; power state remains separate from accessibility state",
+    "mkdir/remove use actual executor, observed outcome and durable mutation identity; no path allowlist",
+    "Native home resolves actual default launcher and requests ActivityOptions target display without any global fallback; observed placement independently verified",
+    "Untargeted global act requires explicit scope=device; terminal row Home never dispatches device action; plain H uses targeted home or unavailable",
+    "Power backend combines proven global wake with lease-owned nonfocusable/nontouchable accessibility-overlay hold on display0; holdDisplayId describes backend scope, not caller-targeted wake. backendHeld reflects actual required backend resources, not screen-lock ownership alone."
+  ],
+  "x-release": {
+    "versionName": "0.1.21",
+    "versionCode": 21,
+    "ciRunNumberIndependent": true
+  }
 }

@@ -19,12 +19,14 @@ class ActionReceipts(context: Context): SQLiteOpenHelper(context,"ai-phone-actio
         is String -> JSONObject.quote(value)
         else -> value.toString()
     }
-    fun lookup(id: String, request: JSONObject): JSONObject? {
+    fun lookup(id: String, request: JSONObject): JSONObject? = lookupSerialized(id,request)?.let { ReceiptJson.parseObject(it) }
+    /** Exact stored bytes are replayed only after the current wire schema validates their value. */
+    fun lookupSerialized(id: String, request: JSONObject): String? {
         readableDatabase.query("receipts",arrayOf("request","response"),"id=?",arrayOf(id),null,null,null).use { c ->
             if(!c.moveToFirst()) return null
             if(c.getString(0)!=canonical(request)) throw Conflict("request_conflict","Request ID already belongs to different immutable content")
             if(c.isNull(1)) throw Conflict("uncertain_action","Prior dispatch has no durable result; do not replay")
-            return JSONObject(c.getString(1))
+            return c.getString(1)
         }
     }
     fun begin(id: String, request: JSONObject) {

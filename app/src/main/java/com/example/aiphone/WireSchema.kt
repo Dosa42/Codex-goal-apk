@@ -15,6 +15,10 @@ class WireSchema(context: Context) {
         checkValue(value,spec,"$")
     }
     private fun reject(path:String, reason:String): Nothing = throw IllegalArgumentException("$path: $reason")
+    private fun equalValue(a:Any?, b:Any?):Boolean = if(a is Number && b is Number) {
+        try { java.math.BigDecimal(a.toString()).compareTo(java.math.BigDecimal(b.toString()))==0 }
+        catch(_:NumberFormatException) { false }
+    } else a==b
     private fun checkValue(value:Any?, spec:JSONObject, path:String) {
         if(spec.has("\$ref")) {
             val ref=spec.getString("\$ref")
@@ -26,10 +30,10 @@ class WireSchema(context: Context) {
             val count=(0 until choices.length()).count { try {checkValue(value,choices.getJSONObject(it),path);true} catch(_:IllegalArgumentException){false} }
             if((kind=="oneOf" && count!=1) || (kind=="anyOf" && count==0)) reject(path,"does not satisfy $kind")
         }
-        if(spec.has("const") && spec.get("const")!=value) reject(path,"const mismatch")
+        if(spec.has("const") && !equalValue(spec.get("const"),value)) reject(path,"const mismatch")
         if(spec.has("enum")) {
             val choices=spec.getJSONArray("enum")
-            if((0 until choices.length()).none { choices.get(it)==value }) reject(path,"enum mismatch")
+            if((0 until choices.length()).none { equalValue(choices.get(it),value) }) reject(path,"enum mismatch")
         }
         fun isType(type:String)=when(type) {
             "null" -> value==null || value==JSONObject.NULL
@@ -38,13 +42,16 @@ class WireSchema(context: Context) {
             "string" -> value is String
             "boolean" -> value is Boolean
             "number" -> value is Number && value.toDouble().isFinite()
-            "integer" -> value is Number && value.toDouble().isFinite() && value.toDouble()==value.toLong().toDouble()
+            "integer" -> value is Number && try { java.math.BigDecimal(value.toString()).stripTrailingZeros().scale()<=0 } catch(_:NumberFormatException) { false }
             else -> throw IllegalStateException("Unsupported schema type $type")
         }
         if(spec.has("type")) {
             val type=spec.get("type")
             val valid=if(type is JSONArray) (0 until type.length()).any{isType(type.getString(it))} else isType(type as String)
             if(!valid) reject(path,"type mismatch")
+        }
+        if(value is Number && spec.has("minimum")) {
+            if(java.math.BigDecimal(value.toString()) < java.math.BigDecimal(spec.get("minimum").toString())) reject(path,"below minimum")
         }
         if(value is String) {
             if(spec.has("minLength") && value.codePointCount(0,value.length)<spec.getInt("minLength")) reject(path,"string too short")

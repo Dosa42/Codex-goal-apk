@@ -2,6 +2,8 @@ package com.example.aiphone
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.ActivityManager
+import android.content.pm.PackageManager
 import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Intent
@@ -29,15 +31,22 @@ class AiPhoneAccessibilityService : AccessibilityService() {
     @Volatile private var socket: Socket? = null
     private var epoch = UUID.randomUUID().toString()
     private var revision = 0L
+    private var protocolReady = false
     private var snapshot = JSONObject()
     private var fingerprint = ""
     private var nodeRefs = linkedMapOf<String, AccessibilityNodeInfo>()
     private val nodeHandles = NativeNodeHandles()
     private var outbound = LinkedBlockingQueue<String>()
     private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) { scheduleCapture() }
-        override fun onDisplayRemoved(displayId: Int) { scheduleCapture() }
-        override fun onDisplayChanged(displayId: Int) { scheduleCapture() }
+        override fun onDisplayAdded(displayId: Int) { scheduleCapture(); powerLeases.observationChanged() }
+        override fun onDisplayRemoved(displayId: Int) { scheduleCapture(); powerLeases.observationChanged() }
+        override fun onDisplayChanged(displayId: Int) { scheduleCapture(); powerLeases.observationChanged() }
+    }
+    private val powerLeases by lazy { PowerLeases.get(this) }
+    private val powerListener: (JSONObject) -> Unit = { state -> emitPowerState(state) }
+    private fun emitPowerState(state: JSONObject) {
+        emit(obj("type" to "event","event" to "power","serviceInstanceId" to epoch,"revision" to revision,
+            "observedAt" to state.getString("observedAt"),"source" to "android_power","powerState" to state))
     }
     private lateinit var receipts: ActionReceipts
     private val wire by lazy { WireSchema(this) }
@@ -64,6 +73,8 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         }
         receipts = ActionReceipts(this)
         alive = true
+        powerLeases.bindService(this)
+        powerLeases.addListener(powerListener)
         getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, main)
         Thread({ connectLoop() }, "ai-phone-link").start()
     }
@@ -83,6 +94,8 @@ class AiPhoneAccessibilityService : AccessibilityService() {
     override fun onInterrupt() { if (alive) emit(base().put("type", "event").put("event", "status").put("status", "unavailable")) }
     override fun onDestroy() {
         alive = false
+        powerLeases.removeListener(powerListener)
+        powerLeases.unbindService(this)
         getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener)
         socket?.close()
         nodeRefs.values.forEach { it.recycle() }
@@ -103,11 +116,13 @@ class AiPhoneAccessibilityService : AccessibilityService() {
                     outbound = queue
                     epoch = UUID.randomUUID().toString()
                     revision = 0
+                    protocolReady = false
                     fingerprint = ""
                     nodeHandles.resetEpoch()
-                    emit(obj("type" to "hello", "protocol" to "ai-phone/1", "serviceInstanceId" to epoch, "capabilities" to capabilities(), "displays" to displayList()))
+                    emit(obj("type" to "hello", "protocol" to "ai-phone/2", "serviceInstanceId" to epoch, "capabilities" to capabilities(), "displays" to displayList()))
                     capture(false)
                     emitFullState()
+                    emitPowerState(powerLeases.state())
                 }
                 writer = Thread({
                     try { connection.getOutputStream().bufferedWriter(Charsets.UTF_8).use { out ->
@@ -147,10 +162,12 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         val available = systemActions.map { it.id }.toSet()
         globals.filterValues { it in available }
     } else globals.filterValues { it < 8 || Build.VERSION.SDK_INT >= 28 }
-    private fun capabilities() = obj("operations" to JSONArray(listOf("discover","displays","observe","apps","launch","act")),
+    private fun capabilities() = obj("operations" to JSONArray(listOf("discover","displays","observe","apps","launch","act","power","home")),
+        "power" to powerLeases.capabilities(),
+        "home" to homeCapability(),
         "nodeActions" to JSONArray(actionIds.keys),
         "globalActions" to JSONArray(globals.map { (name, _) -> obj("name" to name,"available" to (name in supportedGlobals()),"scope" to "untargeted", "reason" to "Android performGlobalAction has no display argument") }),
-        "displayTargeting" to obj("node" to true,"launch" to (Build.VERSION.SDK_INT>=26),"global" to false),
+        "displayTargeting" to obj("node" to true,"launch" to (Build.VERSION.SDK_INT>=26),"global" to false,"power" to false,"home" to (Build.VERSION.SDK_INT>=26)),
         "accessibilityEnabled" to true, "gestures" to false, "screenshots" to false,
         "limitations" to JSONArray(listOf("Only Android-exposed accessibility content; canvas pixels are not semantic nodes", "Global actions cannot be isolated to phone display", "All-display window enumeration requires API 30; this API is ${Build.VERSION.SDK_INT}")))
 
@@ -218,7 +235,7 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         if (changed) { revision++; fingerprint = nextFingerprint }
         snapshot = base().put("displays",displays).put("windows",wins).put("nodes",nodes).put("unavailable",unavailable).put("mode","full")
         if (publish && changed && unavailableChanged) {
-            // unavailable has no typed delta field in ai-phone/1: replace with an authoritative full state.
+            // unavailable has no typed delta field in ai-phone/2: replace with an authoritative full state.
             emitFullState()
         } else if (publish && changed) {
             val changedNodes=JSONArray();val changedWindows=JSONArray();val windowIds=mutableSetOf<Int>()
@@ -250,15 +267,22 @@ class AiPhoneAccessibilityService : AccessibilityService() {
     private fun receive(line: String) {
         var requestId = "invalid-frame"
         var method = "unknown"
+        var dispatchedMutationFrame: JSONObject? = null
         try {
             val frame = JSONObject(line)
             requestId = (frame.opt("requestId") as? String)?.takeIf { it.isNotEmpty() } ?: requestId
             method = (frame.opt("method") as? String)?.takeIf { it.isNotEmpty() } ?: method
+            if(frame.optString("type")=="helloAck" && frame.optString("protocol")!="ai-phone/2") {
+                protocolReady=false
+                socket?.close()
+                fail("protocol_mismatch","Expected ai-phone/2; connection closed")
+            }
             try { wire.validate(frame) } catch(e:IllegalArgumentException) { fail("invalid_frame",e.message ?: "Invalid frame") }
             if (frame.optString("type") == "helloAck") {
-                if (frame.optString("protocol") != "ai-phone/1") fail("invalid_frame","protocol mismatch")
+                protocolReady=true
                 return
             }
+            if(!protocolReady) fail("handshake_required","ai-phone/2 helloAck required before requests")
             allowed(frame,setOf("type","requestId","method","params"))
             requestId = requiredString(frame,"requestId")
             if (frame.optString("type") != "request") fail("invalid_frame","expected request")
@@ -268,31 +292,60 @@ class AiPhoneAccessibilityService : AccessibilityService() {
                 "discover", "displays" -> allowed(params,emptySet())
                 "apps" -> allowed(params,setOf("query","launchableOnly"))
                 "observe" -> allowed(params,setOf("displayId","windowId","selector","mode"))
-                "act" -> allowed(params,setOf("requestId","serviceInstanceId","revision","displayId","windowId","nodeId","action","args"))
+                "act" -> allowed(params,setOf("requestId","serviceInstanceId","revision","displayId","windowId","nodeId","action","args","scope"))
                 "launch" -> allowed(params,setOf("requestId","packageName","activity","displayId"))
+                "home" -> allowed(params,setOf("requestId","displayId"))
+                "power" -> allowed(params,when(params.optString("operation")) {
+                    "status" -> setOf("operation")
+                    "acquire" -> setOf("operation","requestId","owner","scope","deadlineAfterMs")
+                    "release" -> setOf("operation","requestId","leaseId")
+                    else -> fail("invalid_params","Unknown power operation")
+                })
             }
-            val mutation = method == "act" || method == "launch"
+            val mutation = method == "act" || method == "launch" || method == "home" || (method == "power" && params.optString("operation") != "status")
             if (mutation) {
                 if (requiredString(params,"requestId") != requestId) fail("invalid_params","inner and outer requestId differ")
-                val replay = receipts.lookup(requestId, frame)
-                if (replay != null) { emit(replay); return }
+                val replay = receipts.lookupSerialized(requestId, frame)
+                if (replay != null) {
+                    wire.validate(ReceiptJson.parseObject(replay))
+                    // Do not reserialize immutable history through Android's Double parser.
+                    if(socket!=null) outbound.offer(replay)
+                    return
+                }
             }
             val result = when (method) {
-                "discover" -> base().put("protocol","ai-phone/1").put("capabilities",capabilities()).put("schema",wire.schema).put("schemaSha256",wire.sha256).put("connection","online").put("displays",displayList())
+                "discover" -> base().put("protocol","ai-phone/2").put("capabilities",capabilities()).put("schema",wire.schema).put("schemaSha256",wire.sha256).put("connection","online").put("displays",displayList())
                 "displays" -> base().put("displays",displayList())
                 "observe" -> observe(params)
                 "apps" -> apps(params)
                 "act" -> act(params, requestId, frame)
                 "launch" -> launch(params, requestId, frame)
+                "home" -> home(params, requestId) {
+                    receipts.begin(requestId,frame)
+                    dispatchedMutationFrame=frame
+                }
+                "power" -> {
+                    if(params.getString("operation")=="status") obj("operation" to "status","state" to powerLeases.state())
+                    else {
+                        if(params.getString("operation")=="acquire") powerLeases.validateAcquire(params)
+                        receipts.begin(requestId,frame)
+                        dispatchedMutationFrame=frame
+                        if(params.getString("operation")=="acquire") powerLeases.acquire(requestId,params)
+                        else powerLeases.release(requestId,params.getString("leaseId"))
+                    }
+                }
                 else -> fail("unsupported_method","Unknown native method: $method")
             }
             val response = obj("type" to "response","requestId" to requestId,"method" to method,"ok" to true,"result" to result)
             wire.validate(response)
             if (mutation) receipts.complete(requestId,frame,response)
+            dispatchedMutationFrame=null
             emit(response)
         } catch (e: Exception) {
             val cause = e as? Failure
-            emit(obj("type" to "response","requestId" to requestId,"method" to method,"ok" to false,"error" to obj("code" to (cause?.code ?: if(e is ActionReceipts.Conflict) e.code else "native_error"),"message" to (e.message ?: e.javaClass.simpleName),"currentScope" to obj("serviceInstanceId" to epoch,"revision" to revision))))
+            val response=obj("type" to "response","requestId" to requestId,"method" to method,"ok" to false,"error" to obj("code" to (cause?.code ?: when(e) { is ActionReceipts.Conflict -> e.code; is PowerLeases.Failure -> e.code; else -> "native_error" }),"message" to (e.message ?: e.javaClass.simpleName),"currentScope" to obj("serviceInstanceId" to epoch,"revision" to revision)))
+            dispatchedMutationFrame?.let { receipts.complete(requestId,it,response) }
+            emit(response)
         }
     }
     private fun observe(p: JSONObject): JSONObject {
@@ -318,6 +371,7 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         }
         return base().put("displays",snapshot.getJSONArray("displays")).put("windows",wins).put("nodes",if(mode=="full") nodes else JSONArray()).put("nodeCount",nodes.length()).put("mode",mode).put("unavailable",snapshot.getJSONArray("unavailable")).put("fullContentAvailable",true)
     }
+    private fun paramsScope(p: JSONObject) = p.optString("scope","")
     private fun act(p: JSONObject, requestId: String, frame: JSONObject): JSONObject {
         val action=requiredString(p,"action");val display=displayId(p)
         val args=if(p.has("args")) p.optJSONObject("args") ?: fail("invalid_params","args must be an object") else JSONObject()
@@ -328,6 +382,7 @@ class AiPhoneAccessibilityService : AccessibilityService() {
         var target: AccessibilityNodeInfo?=null
         var bundle: Bundle?=null
         if(action in globals) {
+            if(paramsScope(p)!="device") fail("invalid_params","Global actions require explicit scope=device")
             if(action !in supportedGlobals()) fail("unsupported_action","System does not currently expose $action")
             if(display!=0) fail("unsupported_display","Global Android actions cannot be isolated to a requested display")
             if(args.length()!=0) fail("invalid_params","Global action args must be empty")
@@ -362,6 +417,38 @@ class AiPhoneAccessibilityService : AccessibilityService() {
                 }))
         }
         return base().put("apps",list)
+    }
+    private fun resolvedHome(): ComponentName? {
+        val intent=Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val resolved=packageManager.resolveActivity(intent,PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo ?: return null
+        if(!resolved.enabled || !resolved.exported || !resolved.applicationInfo.enabled) return null
+        val component=ComponentName(resolved.packageName,resolved.name)
+        // A chooser is not a default HOME launcher. Require an actual matching HOME candidate.
+        return component.takeIf { packageManager.queryIntentActivities(intent,PackageManager.MATCH_DEFAULT_ONLY).any {
+            it.activityInfo?.let { info -> info.packageName==component.packageName && info.name==component.className } == true
+        } }
+    }
+    private fun homeCapability(): JSONObject {
+        val reason=if(Build.VERSION.SDK_INT<26) "Explicit display launch requires API26" else try {
+            if(resolvedHome()==null) "No enabled exported default HOME launcher resolved" else null
+        } catch(e:Exception) { e.message ?: "HOME resolution unavailable" }
+        return obj("available" to (reason==null),"displayTargeting" to true,"route" to "resolved_home_intent")
+            .also { if(reason!=null) it.put("reason",reason) }
+    }
+    private fun home(p: JSONObject, requestId: String, dispatch: () -> Unit): JSONObject {
+        val display=displayId(p)
+        if(Build.VERSION.SDK_INT<26 || getSystemService(DisplayManager::class.java).getDisplay(display)==null)
+            fail("unsupported_display","Target display or explicit launch API unavailable")
+        if(display!=0 && !packageManager.hasSystemFeature(PackageManager.FEATURE_ACTIVITIES_ON_SECONDARY_DISPLAYS))
+            fail("unsupported_display","Secondary display activity launch unavailable")
+        val component=resolvedHome() ?: fail("home_unavailable","No enabled exported default HOME launcher resolved")
+        val intent=Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if(Build.VERSION.SDK_INT>=29 && !getSystemService(ActivityManager::class.java).isActivityStartAllowedOnDisplay(this,display,intent))
+            fail("unsupported_display","Android disallows HOME launch on requested display")
+        dispatch()
+        startActivity(intent,ActivityOptions.makeBasic().setLaunchDisplayId(display).toBundle())
+        return base().put("accepted",true).put("observedOutcome","unverified").put("requestId",requestId)
+            .put("packageName",component.packageName).put("componentName",component.flattenToString()).put("displayId",display).put("scope","requested_display")
     }
     private fun launch(p: JSONObject, requestId: String, frame: JSONObject): JSONObject {
         val packageName=requiredString(p,"packageName");val display=displayId(p)
