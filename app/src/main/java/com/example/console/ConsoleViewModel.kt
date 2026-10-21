@@ -93,7 +93,7 @@ class ConsoleViewModel @JvmOverloads constructor(
         }
     }
 
-    private suspend fun loadEndpoint(endpoint: String) {
+    private suspend fun loadEndpoint(endpoint: String, isCurrent: () -> Boolean = { true }) {
         val normalized = ConsoleClient.normalizeEndpoint(endpoint)
         val generation = ++endpointLoadGeneration
         pendingEndpointLoad = generation
@@ -101,7 +101,8 @@ class ConsoleViewModel @JvmOverloads constructor(
         try {
             // Publish endpoint and its retained archive together, after IO; never strand initialized=false.
             val local = readEndpointArchive(storage, normalized)
-            if (generation != endpointLoadGeneration || !archiveSelection.matches(token)) return
+            // A newer discovery may keep the visible endpoint and therefore need no replacement load.
+            if (generation != endpointLoadGeneration || !archiveSelection.matches(token) || !isCurrent()) return
             val instance = local.text("instance")
             archiveSelection.begin(normalized, instance)
             mutable.update { previous -> ConsoleState(
@@ -179,7 +180,12 @@ class ConsoleViewModel @JvmOverloads constructor(
     }
 
     fun refreshInfrastructureNow() {
-        viewModelScope.launch { initialized.await(); refreshInfrastructure() }
+        viewModelScope.launch { refreshInfrastructureAndAwait() }
+    }
+
+    internal suspend fun refreshInfrastructureAndAwait() {
+        initialized.await()
+        refreshInfrastructure()
     }
 
     private suspend fun refreshInfrastructure(replace: Boolean = false) {
@@ -210,7 +216,7 @@ class ConsoleViewModel @JvmOverloads constructor(
             if (!currentInfrastructure(url, generation)) return
             val observation = InfrastructureObservation(
                 url, descriptor, System.currentTimeMillis(), state.value.infrastructure.attemptedAtEpochMs,
-                stale = false
+                stale = false, loading = true
             )
             withContext(Dispatchers.IO) { storage.saveInfrastructure(observation) }
             if (!currentInfrastructure(url, generation)) return
@@ -225,14 +231,18 @@ class ConsoleViewModel @JvmOverloads constructor(
                             if (currentInfrastructure(url, generation)) consoleDefault?.let { storage.applyConsoleDefault(it) }
                             storage.endpoint
                         }
-                        if (currentInfrastructure(url, generation) && endpoint != state.value.endpoint) loadEndpoint(endpoint)
+                        if (currentInfrastructure(url, generation) && endpoint != state.value.endpoint)
+                            loadEndpoint(endpoint) { currentInfrastructure(url, generation) }
                     }
                     execDefault?.takeIf { currentInfrastructure(url, generation) }?.let {
                         (getApplication<Application>() as? CodexGoalApplication)?.repository
                             ?.applyInfrastructureDefaultEndpoint(it)
                     }
-                    clearError("infrastructure bindings")
-                } catch (e: Exception) { report("infrastructure bindings", e) }
+                    if (currentInfrastructure(url, generation)) clearError("infrastructure bindings")
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    if (currentInfrastructure(url, generation)) report("infrastructure bindings", e)
+                }
             }.join()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -242,12 +252,15 @@ class ConsoleViewModel @JvmOverloads constructor(
                 report("infrastructure", e)
             }
         } finally {
-            if (currentInfrastructure(url, generation))
+            if (currentInfrastructure(url, generation)) {
+                infrastructureJob = null
+                infrastructureJobUrl = null
                 mutable.update { it.copy(infrastructure = it.infrastructure.copy(loading = false)) }
+            }
         }
     }
 
-    fun saveInfrastructureUrl(value: String) {
+    fun saveInfrastructureUrl(value: String): Job =
         viewModelScope.launch {
             try {
                 val url = InfrastructureClient.discoveryUrl(value)
@@ -257,7 +270,6 @@ class ConsoleViewModel @JvmOverloads constructor(
                 refreshInfrastructure(replace = true)
             } catch (e: Exception) { report("infrastructure settings", e) }
         }
-    }
 
     fun inspectInfrastructureLink(url: String) {
         viewModelScope.launch {

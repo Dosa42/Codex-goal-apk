@@ -6,8 +6,11 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -122,15 +125,16 @@ class ConsoleViewModelTest {
         val model = model()
         until { model.state.value.initialized }
         val endpoint = model.state.value.endpoint
-        model.refreshInfrastructureNow()
-        until { !model.state.value.infrastructure.stale }
+        withTimeout(10_000) { model.refreshInfrastructureAndAwait() }
+        assertFalse(model.state.value.infrastructure.stale)
+        assertFalse(model.state.value.infrastructure.loading)
         val fetchedAt = model.state.value.infrastructure.fetchedAtEpochMs
         assertNotNull(fetchedAt)
         assertEquals(endpoint, model.state.value.endpoint)
         assertEquals("discovery-time", model.state.value.infrastructure.descriptor["observedAt"])
         offline.set(true)
-        model.refreshInfrastructureNow()
-        until { model.state.value.infrastructure.error != null }
+        withTimeout(10_000) { model.refreshInfrastructureAndAwait() }
+        assertNotNull(model.state.value.infrastructure.error)
         assertTrue(model.state.value.infrastructure.stale)
         assertEquals(fetchedAt, model.state.value.infrastructure.fetchedAtEpochMs)
         assertEquals("0.1.19", model.state.value.infrastructure.descriptor.objects("components").first().obj("source").text("version"))
@@ -140,22 +144,27 @@ class ConsoleViewModelTest {
     @Test fun malformedDiscoveryRetainsLastValidCacheAndNeverAppliesItsBinding() = runBlocking {
         val model = model()
         until { model.state.value.initialized }
-        model.refreshInfrastructureNow()
-        until { !model.state.value.infrastructure.stale }
+        withTimeout(10_000) { model.refreshInfrastructureAndAwait() }
+        assertFalse(model.state.value.infrastructure.stale)
+        assertFalse(model.state.value.infrastructure.loading)
+        assertEquals(1, server.requestCount)
         val good = model.state.value.infrastructure
         val endpoint = model.state.value.endpoint
         val unsupported = infrastructureFixture("http://127.0.0.1:9876").let { value ->
             value + ("connections" to (value.obj("connections") + ("execServer" to mapOf(
                 "url" to "ws://127.0.0.1:9877", "protocol" to "future-exec-server-incompatible"))))
         }
-        for ((bad, expectedError) in listOf(
+        for ((index, case) in listOf(
             (infrastructureFixture() + ("components" to emptyList<JsonObject>())) to "Missing canonical component IDs",
             unsupported to "execServer protocol mismatch"
-        )) {
+        ).withIndex()) {
+            val (bad, expectedError) = case
             discovery.set(bad)
-            model.refreshInfrastructureNow()
-            until { model.state.value.infrastructure.stale && !model.state.value.infrastructure.loading &&
-                model.state.value.infrastructure.error?.contains(expectedError) == true }
+            withTimeout(10_000) { model.refreshInfrastructureAndAwait() }
+            assertEquals(index + 2, server.requestCount)
+            assertTrue(model.state.value.infrastructure.stale)
+            assertFalse(model.state.value.infrastructure.loading)
+            assertTrue(model.state.value.infrastructure.error?.contains(expectedError) == true)
             assertNotNull(model.state.value.infrastructure.error)
             assertEquals(good.descriptor, model.state.value.infrastructure.descriptor)
             assertEquals(good.fetchedAtEpochMs, model.state.value.infrastructure.fetchedAtEpochMs)
@@ -165,6 +174,71 @@ class ConsoleViewModelTest {
                 assertEquals(good.fetchedAtEpochMs, it.infrastructure().fetchedAtEpochMs)
                 assertEquals(endpoint, it.endpoint)
             }
+        }
+    }
+
+    @Test fun obsoleteDiscoveredArchiveCannotPublishAfterReplacementKeepsVisibleEndpoint() = runBlocking {
+        val oldEndpoint = server.url("/").toString().trimEnd('/')
+        val obsoleteEndpoint = "http://127.0.0.1:9876"
+        application.getSharedPreferences("goal-console", 0).edit().remove("endpoint")
+            .putString("discoveredConsoleDefault", oldEndpoint).commit()
+        ConsoleStorage(application).use {
+            for ((endpoint, instance, seq) in listOf(
+                Triple(oldEndpoint, "visible-store", 31L), Triple(obsoleteEndpoint, "obsolete-store", 41L)
+            )) {
+                it.registerArchive(endpoint, instance)
+                it.append(ConsoleStorage.archiveKey(endpoint, instance),
+                    EventPage(listOf(mapOf("seq" to seq, "data" to instance)), seq, false))
+            }
+        }
+        val enteredArchiveRead = CompletableDeferred<Job>()
+        val releaseArchiveRead = CompletableDeferred<Unit>()
+        val model = ConsoleViewModel(application) { storage, endpoint ->
+            if (endpoint == obsoleteEndpoint) {
+                enteredArchiveRead.complete(checkNotNull(currentCoroutineContext()[Job]))
+                releaseArchiveRead.await()
+            }
+            readConsoleEndpointArchive(storage, endpoint)
+        }.also { models.put("console", it) }
+        val replacement = MockWebServer()
+        replacement.enqueue(MockResponse().setBody(ConsoleJson.writeIncludingNulls(
+            infrastructureFixture(oldEndpoint) + ("observedAt" to "B"))))
+        replacement.start()
+        val publishedEndpoints = mutableListOf<String>()
+        val collector = launch {
+            model.state.map { it.endpoint }.distinctUntilChanged().collect { publishedEndpoints.add(it) }
+        }
+        try {
+            until { model.state.value.initialized }
+            discovery.set(infrastructureFixture(obsoleteEndpoint) + ("observedAt" to "A"))
+            model.refreshInfrastructureNow()
+            val adoption = withTimeout(10_000) { enteredArchiveRead.await() }
+            assertTrue(model.state.value.infrastructure.loading)
+            assertEquals(oldEndpoint, model.state.value.endpoint)
+            ConsoleStorage(application).use { assertEquals(obsoleteEndpoint, it.endpoint) }
+            withTimeout(10_000) { model.saveInfrastructureUrl(replacement.url("/").toString()).join() }
+            assertEquals(1, replacement.requestCount)
+            assertEquals("B", model.state.value.infrastructure.descriptor.text("observedAt"))
+            assertFalse(model.state.value.infrastructure.stale)
+            assertFalse(model.state.value.infrastructure.loading)
+            val accepted = model.state.value.infrastructure
+            ConsoleStorage(application).use {
+                assertEquals(oldEndpoint, it.endpoint)
+                assertEquals("B", it.infrastructure().descriptor.text("observedAt"))
+            }
+            releaseArchiveRead.complete(Unit)
+            withTimeout(10_000) { adoption.join() }
+            assertEquals(oldEndpoint, model.state.value.endpoint)
+            assertEquals("visible-store", model.state.value.eventArchive)
+            assertEquals(31L, model.state.value.cursor)
+            assertEquals("visible-store", model.state.value.events.single()["data"])
+            assertEquals(accepted, model.state.value.infrastructure)
+            assertFalse(publishedEndpoints.contains(obsoleteEndpoint))
+            ConsoleStorage(application).use { assertEquals(model.state.value.endpoint, it.endpoint) }
+        } finally {
+            releaseArchiveRead.complete(Unit)
+            collector.cancelAndJoin()
+            replacement.shutdown()
         }
     }
 
