@@ -16,10 +16,8 @@ android {
     applicationId = "com.dosa42.codexgoal"
     minSdk = 24
     targetSdk = 36
-    val runNumber = System.getenv("GOAL_APK_VERSION_CODE")?.toIntOrNull()
-      ?: 19
-    versionCode = runNumber
-    versionName = "0.1.$runNumber"
+    versionCode = 20
+    versionName = "0.1.20"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

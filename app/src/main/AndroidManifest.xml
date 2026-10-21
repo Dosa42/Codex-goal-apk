@@ -152,6 +152,14 @@
                 android:value="Persistent local loopback client communicating with Termux codex exec-server" />
         </service>
 
+        <service
+            android:name="com.example.aiphone.AiPhoneAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/ai_phone_accessibility" />
+        </service>
+
         <receiver
             android:name=".service.BootReceiver"
             android:exported="false">

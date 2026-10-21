@@ -1,0 +1,2571 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ai-phone/1",
+  "title": "AI-phone complete native and public operation contract",
+  "description": "Discriminated native NDJSON frames and typed public executor file operations. No content/node/depth/frame ceilings. Runtime also checks matching IDs/scopes, advertised action support, current service/revision and durable request identity.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/hello"
+    },
+    {
+      "$ref": "#/$defs/helloAck"
+    },
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/successResponse"
+    },
+    {
+      "$ref": "#/$defs/errorResponse"
+    },
+    {
+      "$ref": "#/$defs/event"
+    }
+  ],
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "outcomeUnknown": {
+          "type": "boolean"
+        },
+        "currentScope": {
+          "$ref": "#/$defs/scope"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "windowId": {
+          "type": "integer"
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "serviceInstanceId",
+        "revision"
+      ],
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "observedAt",
+        "serviceInstanceId",
+        "revision"
+      ],
+      "additionalProperties": true
+    },
+    "bounds": {
+      "type": "object",
+      "properties": {
+        "left": {
+          "type": "integer"
+        },
+        "top": {
+          "type": "integer"
+        },
+        "right": {
+          "type": "integer"
+        },
+        "bottom": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ],
+      "additionalProperties": true
+    },
+    "display": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "nodeAction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": true
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "childIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "windowId": {
+          "type": "integer"
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "packageName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "className": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentDescription": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "viewIdResourceName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodeAction"
+          }
+        },
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clickable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longClickable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focusable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focused": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accessibilityFocused": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "editable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scrollable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "password": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visibleToUser": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "parentId",
+        "childIds",
+        "windowId",
+        "displayId",
+        "text",
+        "contentDescription",
+        "actions"
+      ],
+      "additionalProperties": true
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "packageName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focused": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "rootNodeId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "integer"
+        },
+        "layer": {
+          "type": "integer"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        }
+      },
+      "required": [
+        "id",
+        "displayId",
+        "rootNodeId"
+      ],
+      "additionalProperties": true
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "source": {
+          "const": "android_accessibility"
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/window"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "unavailable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/error"
+          }
+        },
+        "mode": {
+          "const": "full"
+        }
+      },
+      "required": [
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "source",
+        "displays",
+        "windows",
+        "nodes",
+        "unavailable",
+        "mode"
+      ],
+      "additionalProperties": true
+    },
+    "actionCapability": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": [
+            "node_display",
+            "requested_display",
+            "global",
+            "default_display",
+            "untargeted",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "available",
+        "scope"
+      ],
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "discover",
+              "displays",
+              "observe",
+              "apps",
+              "launch",
+              "act",
+              "files",
+              "watch"
+            ]
+          }
+        },
+        "nodeActions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "globalActions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/actionCapability"
+          }
+        },
+        "displayTargeting": {
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "boolean"
+            },
+            "launch": {
+              "type": "boolean"
+            },
+            "global": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "node",
+            "launch",
+            "global"
+          ],
+          "additionalProperties": true
+        },
+        "accessibilityEnabled": {
+          "type": "boolean"
+        },
+        "gestures": {
+          "type": "boolean"
+        },
+        "screenshots": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operations",
+        "nodeActions",
+        "globalActions",
+        "displayTargeting",
+        "limitations"
+      ],
+      "additionalProperties": true
+    },
+    "selector": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "textContains": {
+          "type": "string"
+        },
+        "viewIdResourceName": {
+          "type": "string"
+        },
+        "className": {
+          "type": "string"
+        },
+        "packageName": {
+          "type": "string"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "scrollable": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "observeParams": {
+      "type": "object",
+      "properties": {
+        "displayId": {
+          "type": "integer"
+        },
+        "windowId": {
+          "type": "integer"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "mode": {
+          "enum": [
+            "full",
+            "summary"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "source": {
+          "const": "android_accessibility"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/window"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "fullContentAvailable": {
+          "const": true
+        },
+        "mode": {
+          "const": "summary"
+        }
+      },
+      "required": [
+        "serviceInstanceId",
+        "revision",
+        "source",
+        "observedAt",
+        "windows",
+        "nodes",
+        "fullContentAvailable",
+        "mode"
+      ],
+      "additionalProperties": true
+    },
+    "observeResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/state"
+        },
+        {
+          "$ref": "#/$defs/summary"
+        }
+      ]
+    },
+    "app": {
+      "type": "object",
+      "properties": {
+        "packageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "launchable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "launchable": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "packageName",
+        "label",
+        "launchable"
+      ],
+      "additionalProperties": true
+    },
+    "appsParams": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "launchableOnly": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "appsResult": {
+      "type": "object",
+      "properties": {
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/app"
+          }
+        }
+      },
+      "required": [
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "source",
+        "apps"
+      ],
+      "additionalProperties": true
+    },
+    "displaysResult": {
+      "type": "object",
+      "properties": {
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        }
+      },
+      "required": [
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "source",
+        "displays"
+      ],
+      "additionalProperties": true
+    },
+    "actParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "serviceInstanceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "displayId": {
+              "type": "integer"
+            },
+            "windowId": {
+              "type": "integer"
+            },
+            "nodeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "enum": [
+                "click",
+                "long_click",
+                "focus",
+                "accessibility_focus",
+                "scroll_forward",
+                "scroll_backward"
+              ]
+            },
+            "args": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "requestId",
+            "serviceInstanceId",
+            "revision",
+            "displayId",
+            "windowId",
+            "nodeId",
+            "action",
+            "args"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "serviceInstanceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "displayId": {
+              "type": "integer"
+            },
+            "windowId": {
+              "type": "integer"
+            },
+            "nodeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "const": "set_text"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "requestId",
+            "serviceInstanceId",
+            "revision",
+            "displayId",
+            "windowId",
+            "nodeId",
+            "action",
+            "args"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "serviceInstanceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "displayId": {
+              "type": "integer"
+            },
+            "action": {
+              "enum": [
+                "home",
+                "back",
+                "recents",
+                "notifications",
+                "quick_settings",
+                "power_dialog",
+                "lock_screen",
+                "take_screenshot"
+              ]
+            },
+            "args": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "requestId",
+            "serviceInstanceId",
+            "revision",
+            "displayId",
+            "action",
+            "args"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "actionResult": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "observedOutcome": {
+          "enum": [
+            "changed",
+            "unchanged",
+            "unverified"
+          ]
+        },
+        "beforeRevision": {
+          "type": "integer"
+        },
+        "afterRevision": {
+          "type": "integer"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "node_display",
+            "requested_display",
+            "global",
+            "default_display",
+            "untargeted",
+            "unavailable"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        }
+      },
+      "required": [
+        "requestId",
+        "accepted",
+        "observedOutcome",
+        "beforeRevision",
+        "afterRevision",
+        "serviceInstanceId",
+        "source",
+        "observedAt",
+        "scope"
+      ],
+      "additionalProperties": true
+    },
+    "launchParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activity": {
+          "type": "string"
+        },
+        "displayId": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestId",
+        "packageName",
+        "displayId"
+      ],
+      "additionalProperties": false
+    },
+    "launchResult": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "observedOutcome": {
+          "enum": [
+            "changed",
+            "unchanged",
+            "unverified"
+          ]
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayId": {
+          "type": "integer"
+        },
+        "scope": {
+          "enum": [
+            "requested_display",
+            "default_display",
+            "untargeted",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        }
+      },
+      "required": [
+        "requestId",
+        "accepted",
+        "observedOutcome",
+        "packageName",
+        "displayId",
+        "scope",
+        "source",
+        "observedAt",
+        "serviceInstanceId",
+        "revision"
+      ],
+      "additionalProperties": true
+    },
+    "machineSchema": {
+      "type": "object",
+      "required": [
+        "$schema",
+        "$id",
+        "$defs",
+        "oneOf"
+      ],
+      "properties": {
+        "$schema": {
+          "const": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "$id": {
+          "const": "ai-phone/1"
+        },
+        "$defs": {
+          "type": "object"
+        },
+        "oneOf": {
+          "type": "array",
+          "minItems": 1
+        }
+      }
+    },
+    "discoverResult": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "ai-phone/1"
+        },
+        "schema": {
+          "$ref": "#/$defs/machineSchema"
+        },
+        "schemaSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "serviceInstanceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connection": {
+          "enum": [
+            "online",
+            "offline",
+            "recovering",
+            "unavailable"
+          ]
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        }
+      },
+      "required": [
+        "protocol",
+        "schema",
+        "schemaSha256",
+        "capabilities",
+        "observedAt",
+        "source",
+        "connection"
+      ],
+      "additionalProperties": true
+    },
+    "delta": {
+      "type": "object",
+      "properties": {
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        },
+        "windowsUpsert": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/window"
+          }
+        },
+        "windowsRemoved": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "nodesUpsert": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "nodesRemoved": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "displays",
+        "windowsUpsert",
+        "windowsRemoved",
+        "nodesUpsert",
+        "nodesRemoved"
+      ],
+      "additionalProperties": true
+    },
+    "fileProvenance": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "const": "native_exec_server"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "endpoint",
+        "sessionId",
+        "observedAt"
+      ],
+      "additionalProperties": true
+    },
+    "fileEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "file",
+            "directory",
+            "symlink",
+            "other"
+          ]
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modifiedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "type"
+      ],
+      "additionalProperties": true
+    },
+    "fileListParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "list"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "includeHidden": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "fileReadParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "read"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "encoding": {
+          "enum": [
+            "utf-8",
+            "base64"
+          ]
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "fileWriteParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "write"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "encoding": {
+          "enum": [
+            "utf-8",
+            "base64"
+          ]
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "fileEditParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "edit"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "find": {
+          "type": "string"
+        },
+        "replace": {
+          "type": "string"
+        },
+        "expectedSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path",
+        "find",
+        "replace"
+      ],
+      "additionalProperties": false
+    },
+    "fileCopyParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "copy"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path",
+        "destination"
+      ],
+      "additionalProperties": false
+    },
+    "fileMoveParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "move"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path",
+        "destination"
+      ],
+      "additionalProperties": false
+    },
+    "fileRenameParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "const": "rename"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "operation",
+        "path",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "fileParams": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/fileListParams"
+        },
+        {
+          "$ref": "#/$defs/fileReadParams"
+        },
+        {
+          "$ref": "#/$defs/fileWriteParams"
+        },
+        {
+          "$ref": "#/$defs/fileEditParams"
+        },
+        {
+          "$ref": "#/$defs/fileCopyParams"
+        },
+        {
+          "$ref": "#/$defs/fileMoveParams"
+        },
+        {
+          "$ref": "#/$defs/fileRenameParams"
+        }
+      ]
+    },
+    "fileResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "list"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "$ref": "#/$defs/fileProvenance"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/fileEntry"
+              }
+            }
+          },
+          "required": [
+            "operation",
+            "requestId",
+            "path",
+            "provenance",
+            "entries"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "read"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "$ref": "#/$defs/fileProvenance"
+            },
+            "encoding": {
+              "enum": [
+                "utf-8",
+                "base64"
+              ]
+            },
+            "data": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "bytes": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "requestId",
+            "path",
+            "provenance",
+            "encoding",
+            "data",
+            "sha256",
+            "bytes"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "enum": [
+                "write",
+                "edit",
+                "copy",
+                "move",
+                "rename"
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provenance": {
+              "$ref": "#/$defs/fileProvenance"
+            },
+            "accepted": {
+              "type": "boolean"
+            },
+            "observedOutcome": {
+              "enum": [
+                "changed",
+                "unchanged",
+                "unverified"
+              ]
+            },
+            "destination": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "receipt": {
+              "$ref": "#/$defs/receipt"
+            }
+          },
+          "required": [
+            "operation",
+            "requestId",
+            "path",
+            "provenance",
+            "accepted",
+            "observedOutcome"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "enum": [
+            "received",
+            "dispatched",
+            "completed",
+            "uncertain"
+          ]
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/actParams"
+            },
+            {
+              "$ref": "#/$defs/launchParams"
+            },
+            {
+              "$ref": "#/$defs/fileParams"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "outcomeUnknown": {
+          "type": "boolean"
+        },
+        "response": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "requestId",
+        "phase",
+        "operation",
+        "request",
+        "createdAt",
+        "updatedAt",
+        "outcomeUnknown",
+        "source"
+      ],
+      "additionalProperties": true
+    },
+    "discoverRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "discover"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "discoverResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "discover"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/discoverResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "displaysRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "displays"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "displaysResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "displays"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/displaysResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "observeRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "observe"
+        },
+        "params": {
+          "$ref": "#/$defs/observeParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "observeResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "observe"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/observeResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "appsRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "apps"
+        },
+        "params": {
+          "$ref": "#/$defs/appsParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "appsResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "apps"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/appsResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "launchRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "launch"
+        },
+        "params": {
+          "$ref": "#/$defs/launchParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "launchResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "launch"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/launchResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "actRequest": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "act"
+        },
+        "params": {
+          "$ref": "#/$defs/actParams"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "actResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "const": "act"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "$ref": "#/$defs/actionResult"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/discoverRequest"
+        },
+        {
+          "$ref": "#/$defs/displaysRequest"
+        },
+        {
+          "$ref": "#/$defs/observeRequest"
+        },
+        {
+          "$ref": "#/$defs/appsRequest"
+        },
+        {
+          "$ref": "#/$defs/launchRequest"
+        },
+        {
+          "$ref": "#/$defs/actRequest"
+        }
+      ]
+    },
+    "successResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/discoverResponse"
+        },
+        {
+          "$ref": "#/$defs/displaysResponse"
+        },
+        {
+          "$ref": "#/$defs/observeResponse"
+        },
+        {
+          "$ref": "#/$defs/appsResponse"
+        },
+        {
+          "$ref": "#/$defs/launchResponse"
+        },
+        {
+          "$ref": "#/$defs/actResponse"
+        }
+      ]
+    },
+    "errorResponse": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "method",
+        "ok",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "hello": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "protocol": {
+          "const": "ai-phone/1"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/display"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "protocol",
+        "serviceInstanceId",
+        "capabilities",
+        "displays"
+      ],
+      "additionalProperties": false
+    },
+    "helloAck": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "helloAck"
+        },
+        "protocol": {
+          "const": "ai-phone/1"
+        },
+        "brokerInstanceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "protocol",
+        "brokerInstanceId"
+      ],
+      "additionalProperties": false
+    },
+    "stateEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "event": {
+          "const": "state"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        }
+      },
+      "required": [
+        "type",
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "event",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "deltaEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "event": {
+          "const": "delta"
+        },
+        "baseRevision": {
+          "type": "integer"
+        },
+        "delta": {
+          "$ref": "#/$defs/delta"
+        }
+      },
+      "required": [
+        "type",
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "event",
+        "baseRevision",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "statusEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "serviceInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "event": {
+          "const": "status"
+        },
+        "status": {
+          "enum": [
+            "online",
+            "offline",
+            "recovering",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "type",
+        "serviceInstanceId",
+        "revision",
+        "observedAt",
+        "event",
+        "status",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/stateEvent"
+        },
+        {
+          "$ref": "#/$defs/deltaEvent"
+        },
+        {
+          "$ref": "#/$defs/statusEvent"
+        }
+      ]
+    },
+    "publicFileRequest": {
+      "$ref": "#/$defs/fileParams"
+    },
+    "publicFileResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "source": {
+          "const": "native_exec_server"
+        },
+        "result": {
+          "$ref": "#/$defs/fileResult"
+        }
+      },
+      "required": [
+        "ok",
+        "observedAt",
+        "source",
+        "result"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-transport": {
+    "native": "tcp://127.0.0.1:8793",
+    "http": "http://127.0.0.1:8794",
+    "framing": "newline UTF-8 JSON; no application frame cap"
+  },
+  "x-publicOperations": {
+    "files": {
+      "params": {
+        "$ref": "#/$defs/fileParams"
+      },
+      "result": {
+        "$ref": "#/$defs/fileResult"
+      }
+    },
+    "receipt": {
+      "$ref": "#/$defs/receipt"
+    },
+    "discover": {
+      "$ref": "#/$defs/discoverResult"
+    }
+  },
+  "x-runtimeValidation": [
+    "Equal frame requestId and mutation params.requestId",
+    "Current serviceInstanceId/revision/windowId/displayId/nodeId",
+    "Advertised action availability, actual scope and matching args",
+    "Immutable durable request IDs; conflicting bodies fail; uncertain mutation never replays"
+  ]
+}

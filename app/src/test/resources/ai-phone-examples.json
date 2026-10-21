@@ -1,0 +1,338 @@
+{
+  "schema": "protocol.schema.json",
+  "description": "Validation fixtures only, never actual device observations.",
+  "cases": [
+    {
+      "name": "observe_request",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "params": {
+          "displayId": 0
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "text_action",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "hello",
+      "definition": "hello",
+      "value": {
+        "type": "hello",
+        "protocol": "ai-phone/1",
+        "serviceInstanceId": "fixture-epoch",
+        "capabilities": {
+          "operations": [
+            "discover",
+            "displays",
+            "observe",
+            "apps",
+            "launch",
+            "act"
+          ],
+          "nodeActions": [
+            "click",
+            "set_text"
+          ],
+          "globalActions": [
+            {
+              "name": "home",
+              "available": true,
+              "scope": "untargeted"
+            }
+          ],
+          "displayTargeting": {
+            "node": true,
+            "launch": true,
+            "global": false
+          },
+          "limitations": [
+            "Fixture: this validates shapes, not observed device capabilities."
+          ]
+        },
+        "displays": [
+          {
+            "id": 0
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "full_state_response",
+      "definition": "successResponse",
+      "value": {
+        "type": "response",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "ok": true,
+        "result": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": []
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "state_event",
+      "definition": "event",
+      "value": {
+        "type": "event",
+        "event": "state",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": []
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "file_copy",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-copy",
+        "operation": "copy",
+        "path": "/actual/source",
+        "destination": "/actual/destination"
+      },
+      "valid": true
+    },
+    {
+      "name": "file_read",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-read",
+        "operation": "read",
+        "path": "/any/authorized/path",
+        "encoding": "utf-8"
+      },
+      "valid": true
+    },
+    {
+      "name": "request_missing_id",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "method": "observe",
+        "params": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "request_missing_method",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "params": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "request_missing_params",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "method": "observe"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_response",
+      "definition": "successResponse",
+      "value": {
+        "type": "response"
+      },
+      "valid": false
+    },
+    {
+      "name": "untyped_result",
+      "definition": "successResponse",
+      "value": {
+        "type": "response",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "ok": true,
+        "result": "fake tree"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_event",
+      "definition": "event",
+      "value": {
+        "type": "event"
+      },
+      "valid": false
+    },
+    {
+      "name": "state_without_nodes",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "unavailable": []
+      },
+      "valid": false
+    },
+    {
+      "name": "text_action_numeric_text",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": 5
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "text_action_missing_node",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unsupported_action",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "fabricated_action",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "bad_window_type",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": "7",
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "error_without_message",
+      "definition": "error",
+      "value": {
+        "code": "invalid_request"
+      },
+      "valid": false
+    },
+    {
+      "name": "copy_without_destination",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-copy",
+        "operation": "copy",
+        "path": "/a"
+      },
+      "valid": false
+    },
+    {
+      "name": "read_without_path",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-read",
+        "operation": "read"
+      },
+      "valid": false
+    },
+    {
+      "name": "edit_bad_find",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-edit",
+        "operation": "edit",
+        "path": "/a",
+        "find": 5,
+        "replace": "x"
+      },
+      "valid": false
+    }
+  ]
+}
