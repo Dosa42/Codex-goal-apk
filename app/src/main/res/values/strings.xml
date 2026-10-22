@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Codex Goal</string>
+    <string name="ai_phone_accessibility_description">Expose real accessible phone windows and semantic controls to the local AI-phone broker.</string>
 </resources>

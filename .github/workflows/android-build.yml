@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GOAL_APK_VERSION_CODE: '19'
+      GOAL_APK_VERSION_CODE: '22'
       NDK_VERSION: ${{ github.event.inputs.ndk_version || '27.2.12479018' }}
       CMAKE_VERSION: ${{ github.event.inputs.cmake_version || '3.22.1' }}
       EXPECTED_JNI_LIBS: ${{ github.event.inputs.expected_jni_libs || '' }}
@@ -204,7 +204,7 @@ jobs:
 
           # 4. Generate Structured Artifact Metadata JSON
           APK_SHA256=$(sha256sum "$APK_PATH" | awk '{print $1}')
-          RUN_NUM="${GOAL_APK_VERSION_CODE:-${GITHUB_RUN_NUMBER:-1}}"
+          RUN_NUM="${GOAL_APK_VERSION_CODE:?GOAL_APK_VERSION_CODE must be set independently of CI run number}"
           cat <<EOF > ci-artifacts/build_metadata.json
           {
             "applicationId": "com.dosa42.codexgoal",

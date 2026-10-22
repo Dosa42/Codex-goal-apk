@@ -1,0 +1,1315 @@
+{
+  "schema": "protocol.schema.json",
+  "description": "Validation fixtures only; synthetic shapes are never actual device observations. Protocol2 adds explicitly global power ownership and actual executor mkdir/remove. Release0.1.22 adds typed resident snapshot/freshness fixtures; timestamps and values are synthetic validation data only.",
+  "cases": [
+    {
+      "name": "observe_request",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "params": {
+          "displayId": 0
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "text_action",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "hello",
+      "definition": "hello",
+      "value": {
+        "type": "hello",
+        "protocol": "ai-phone/2",
+        "serviceInstanceId": "fixture-epoch",
+        "capabilities": {
+          "operations": [
+            "discover",
+            "displays",
+            "observe",
+            "apps",
+            "launch",
+            "act",
+            "power",
+            "home"
+          ],
+          "nodeActions": [
+            "click",
+            "set_text"
+          ],
+          "globalActions": [
+            {
+              "name": "home",
+              "available": true,
+              "scope": "untargeted"
+            }
+          ],
+          "displayTargeting": {
+            "node": true,
+            "launch": true,
+            "global": false,
+            "power": false,
+            "home": true
+          },
+          "limitations": [
+            "Fixture: this validates shapes, not observed device capabilities."
+          ],
+          "power": {
+            "wake": true,
+            "hold": true,
+            "release": true,
+            "scope": "device",
+            "displayTargeting": false,
+            "backend": "android_screen_wake_lock_with_accessibility_overlay",
+            "holdDisplayId": 0
+          },
+          "home": {
+            "available": true,
+            "displayTargeting": true,
+            "route": "resolved_home_intent"
+          }
+        },
+        "displays": [
+          {
+            "id": 0
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "full_state_response",
+      "definition": "successResponse",
+      "value": {
+        "type": "response",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "ok": true,
+        "result": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": []
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "state_event",
+      "definition": "event",
+      "value": {
+        "type": "event",
+        "event": "state",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": []
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "file_copy",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-copy",
+        "operation": "copy",
+        "path": "/actual/source",
+        "destination": "/actual/destination"
+      },
+      "valid": true
+    },
+    {
+      "name": "file_read",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-read",
+        "operation": "read",
+        "path": "/any/authorized/path",
+        "encoding": "utf-8"
+      },
+      "valid": true
+    },
+    {
+      "name": "request_missing_id",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "method": "observe",
+        "params": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "request_missing_method",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "params": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "request_missing_params",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-read",
+        "method": "observe"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_response",
+      "definition": "successResponse",
+      "value": {
+        "type": "response"
+      },
+      "valid": false
+    },
+    {
+      "name": "untyped_result",
+      "definition": "successResponse",
+      "value": {
+        "type": "response",
+        "requestId": "fixture-read",
+        "method": "observe",
+        "ok": true,
+        "result": "fake tree"
+      },
+      "valid": false
+    },
+    {
+      "name": "empty_event",
+      "definition": "event",
+      "value": {
+        "type": "event"
+      },
+      "valid": false
+    },
+    {
+      "name": "state_without_nodes",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "unavailable": []
+      },
+      "valid": false
+    },
+    {
+      "name": "text_action_numeric_text",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": 5
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "text_action_missing_node",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unsupported_action",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": 7,
+        "nodeId": "fixture-node",
+        "action": "fabricated_action",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "bad_window_type",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-act",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "windowId": "7",
+        "nodeId": "fixture-node",
+        "action": "set_text",
+        "args": {
+          "text": "actual caller text"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "error_without_message",
+      "definition": "error",
+      "value": {
+        "code": "invalid_request"
+      },
+      "valid": false
+    },
+    {
+      "name": "copy_without_destination",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-copy",
+        "operation": "copy",
+        "path": "/a"
+      },
+      "valid": false
+    },
+    {
+      "name": "read_without_path",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-read",
+        "operation": "read"
+      },
+      "valid": false
+    },
+    {
+      "name": "edit_bad_find",
+      "definition": "fileParams",
+      "value": {
+        "requestId": "fixture-edit",
+        "operation": "edit",
+        "path": "/a",
+        "find": 5,
+        "replace": "x"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_acquire_no_default_deadline",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-acquire",
+        "method": "power",
+        "params": {
+          "operation": "acquire",
+          "requestId": "fixture-acquire",
+          "owner": "fixture-only",
+          "scope": "device"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "power_explicit_deadline",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "owner": "fixture-only",
+        "scope": "device",
+        "deadlineAfterMs": 9000000000
+      },
+      "valid": true
+    },
+    {
+      "name": "power_status",
+      "definition": "powerParams",
+      "value": {
+        "operation": "status"
+      },
+      "valid": true
+    },
+    {
+      "name": "power_release",
+      "definition": "powerParams",
+      "value": {
+        "operation": "release",
+        "requestId": "fixture-release",
+        "leaseId": "fixture-acquire"
+      },
+      "valid": true
+    },
+    {
+      "name": "power_mutation_result",
+      "definition": "successResponse",
+      "value": {
+        "type": "response",
+        "requestId": "fixture-acquire",
+        "method": "power",
+        "ok": true,
+        "result": {
+          "operation": "acquire",
+          "requestId": "fixture-acquire",
+          "accepted": true,
+          "observedOutcome": "changed",
+          "leaseId": "fixture-acquire",
+          "before": {
+            "source": "android_power",
+            "observedAt": "2026-10-21T21:00:00Z",
+            "processInstanceId": "fixture-process",
+            "scope": "device",
+            "displayTargeting": false,
+            "backend": "android_screen_wake_lock_with_accessibility_overlay",
+            "backendHeld": false,
+            "deviceInteractive": false,
+            "keyguardLocked": false,
+            "displays": [
+              {
+                "id": 0,
+                "displayId": 0,
+                "state": "1"
+              },
+              {
+                "id": 18,
+                "displayId": 18,
+                "state": "2"
+              }
+            ],
+            "activeLeases": [],
+            "powerRevision": 1,
+            "holdDisplayId": 0
+          },
+          "state": {
+            "source": "android_power",
+            "observedAt": "2026-10-21T21:00:00Z",
+            "processInstanceId": "fixture-process",
+            "scope": "device",
+            "displayTargeting": false,
+            "backend": "android_screen_wake_lock_with_accessibility_overlay",
+            "backendHeld": true,
+            "deviceInteractive": true,
+            "keyguardLocked": false,
+            "displays": [
+              {
+                "id": 0,
+                "displayId": 0,
+                "state": "1"
+              },
+              {
+                "id": 18,
+                "displayId": 18,
+                "state": "2"
+              }
+            ],
+            "activeLeases": [
+              {
+                "leaseId": "fixture-acquire",
+                "owner": "fixture-only",
+                "acquiredAt": "2026-10-21T21:00:00Z",
+                "deadlineAt": null,
+                "held": true,
+                "scope": "device"
+              }
+            ],
+            "powerRevision": 2,
+            "holdDisplayId": 0
+          }
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "power_event",
+      "definition": "event",
+      "value": {
+        "type": "event",
+        "event": "power",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 5,
+        "observedAt": "2026-10-21T21:00:00Z",
+        "source": "android_power",
+        "powerState": {
+          "source": "android_power",
+          "observedAt": "2026-10-21T21:00:00Z",
+          "processInstanceId": "fixture-process",
+          "scope": "device",
+          "displayTargeting": false,
+          "backend": "android_screen_wake_lock_with_accessibility_overlay",
+          "backendHeld": true,
+          "deviceInteractive": true,
+          "keyguardLocked": false,
+          "displays": [
+            {
+              "id": 0,
+              "displayId": 0,
+              "state": "1"
+            },
+            {
+              "id": 18,
+              "displayId": 18,
+              "state": "2"
+            }
+          ],
+          "activeLeases": [
+            {
+              "leaseId": "fixture-acquire",
+              "owner": "fixture-only",
+              "acquiredAt": "2026-10-21T21:00:00Z",
+              "deadlineAt": null,
+              "held": true,
+              "scope": "device"
+            }
+          ],
+          "powerRevision": 1,
+          "holdDisplayId": 0
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "mkdir_public",
+      "definition": "fileParams",
+      "value": {
+        "operation": "mkdir",
+        "requestId": "fixture-mkdir",
+        "path": "/actual/owned/path",
+        "recursive": false
+      },
+      "valid": true
+    },
+    {
+      "name": "remove_public",
+      "definition": "fileParams",
+      "value": {
+        "operation": "remove",
+        "requestId": "fixture-remove",
+        "path": "/actual/owned/path",
+        "recursive": true
+      },
+      "valid": true
+    },
+    {
+      "name": "power_no_display_target_claim",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "owner": "fixture-only",
+        "scope": "device",
+        "displayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_no_display_scope",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "owner": "fixture-only",
+        "scope": "display0"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_no_hidden_default_deadline",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "owner": "fixture-only",
+        "scope": "device",
+        "deadlineAfterMs": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_no_fractional_deadline",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "owner": "fixture-only",
+        "scope": "device",
+        "deadlineAfterMs": 1.5
+      },
+      "valid": false
+    },
+    {
+      "name": "power_owner_required",
+      "definition": "powerParams",
+      "value": {
+        "operation": "acquire",
+        "requestId": "fixture-acquire",
+        "scope": "device"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_release_lease_required",
+      "definition": "powerParams",
+      "value": {
+        "operation": "release",
+        "requestId": "fixture-release"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_status_no_mutation_fields",
+      "definition": "powerParams",
+      "value": {
+        "operation": "status",
+        "requestId": "unexpected"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_result_state_typed",
+      "definition": "powerResult",
+      "value": {
+        "operation": "status",
+        "state": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "power_no_fake_display_targeting",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": true,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1,
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_lease_owner_typed",
+      "definition": "powerLease",
+      "value": {
+        "leaseId": "fixture-acquire",
+        "owner": 3,
+        "acquiredAt": "2026-10-21T21:00:00Z",
+        "deadlineAt": null,
+        "held": true,
+        "scope": "device"
+      },
+      "valid": false
+    },
+    {
+      "name": "mkdir_recursive_boolean",
+      "definition": "fileParams",
+      "value": {
+        "operation": "mkdir",
+        "requestId": "fixture-mkdir",
+        "path": "/actual/owned",
+        "recursive": "true"
+      },
+      "valid": false
+    },
+    {
+      "name": "remove_requires_path",
+      "definition": "fileParams",
+      "value": {
+        "operation": "remove",
+        "requestId": "fixture-remove"
+      },
+      "valid": false
+    },
+    {
+      "name": "remove_no_new_allowlist",
+      "definition": "fileParams",
+      "value": {
+        "operation": "remove",
+        "requestId": "fixture-remove",
+        "path": "/actual/owned",
+        "workspaceOnly": true
+      },
+      "valid": false
+    },
+    {
+      "name": "targeted_home_request",
+      "definition": "request",
+      "value": {
+        "type": "request",
+        "requestId": "fixture-home",
+        "method": "home",
+        "params": {
+          "requestId": "fixture-home",
+          "displayId": 0
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "targeted_home_no_global_scope",
+      "definition": "homeParams",
+      "value": {
+        "requestId": "fixture-home",
+        "displayId": 0,
+        "scope": "device"
+      },
+      "valid": false
+    },
+    {
+      "name": "targeted_home_requires_display",
+      "definition": "homeParams",
+      "value": {
+        "requestId": "fixture-home"
+      },
+      "valid": false
+    },
+    {
+      "name": "targeted_home_no_caller_component",
+      "definition": "homeParams",
+      "value": {
+        "requestId": "fixture-home",
+        "displayId": 0,
+        "componentName": "invented"
+      },
+      "valid": false
+    },
+    {
+      "name": "global_home_explicit_device",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-device-home",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "action": "home",
+        "args": {},
+        "scope": "device"
+      },
+      "valid": true
+    },
+    {
+      "name": "global_home_not_default_phone",
+      "definition": "actParams",
+      "value": {
+        "requestId": "fixture-device-home",
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "displayId": 0,
+        "action": "home",
+        "args": {}
+      },
+      "valid": false
+    },
+    {
+      "name": "power_revision_missing",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_revision_zero",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 0,
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_revision_string",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": "1",
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_revision_boolean",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": true,
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_revision_beyond_int32",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1099511627776,
+        "holdDisplayId": 0
+      },
+      "valid": true
+    },
+    {
+      "name": "power_hold_display_required",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1099511627776
+      },
+      "valid": false
+    },
+    {
+      "name": "power_hold_display_string",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1099511627776,
+        "holdDisplayId": "0"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_hold_display_must_be_default",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1099511627776,
+        "holdDisplayId": 18
+      },
+      "valid": false
+    },
+    {
+      "name": "power_hold_capability_display_required",
+      "definition": "powerCapability",
+      "value": {
+        "wake": true,
+        "hold": true,
+        "release": true,
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_wake_lock_with_accessibility_overlay"
+      },
+      "valid": false
+    },
+    {
+      "name": "power_hold_capability_backend_truthful",
+      "definition": "powerCapability",
+      "value": {
+        "wake": true,
+        "hold": true,
+        "release": true,
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_bright_wake_lock",
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "power_hold_state_backend_truthful",
+      "definition": "powerState",
+      "value": {
+        "source": "android_power",
+        "observedAt": "2026-10-21T21:00:00Z",
+        "processInstanceId": "fixture-process",
+        "scope": "device",
+        "displayTargeting": false,
+        "backend": "android_screen_bright_wake_lock",
+        "backendHeld": false,
+        "deviceInteractive": false,
+        "keyguardLocked": false,
+        "displays": [
+          {
+            "id": 0,
+            "displayId": 0,
+            "state": "1"
+          },
+          {
+            "id": 18,
+            "displayId": 18,
+            "state": "2"
+          }
+        ],
+        "activeLeases": [],
+        "powerRevision": 1099511627776,
+        "holdDisplayId": 0
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_full_resident",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "snapshot_unavailable",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": null,
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": false,
+        "stale": true,
+        "connection": "offline",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": null
+      },
+      "valid": true
+    },
+    {
+      "name": "snapshot_empty_params",
+      "definition": "snapshotParams",
+      "value": {},
+      "valid": true
+    },
+    {
+      "name": "snapshot_cached_false",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": false,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_bad_generation",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": true,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_bad_stale_type",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": "false",
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_missing_state",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "observation_bad_freshness",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "nodes": [],
+        "unavailable": [],
+        "freshness": "instant",
+        "capturePending": false
+      },
+      "valid": false
+    },
+    {
+      "name": "observation_bad_pending_type",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "nodes": [],
+        "unavailable": [],
+        "freshness": "captured",
+        "capturePending": "false"
+      },
+      "valid": false
+    },
+    {
+      "name": "summary_resident_with_pending",
+      "definition": "summary",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "summary",
+        "windows": [],
+        "nodes": [],
+        "freshness": "resident",
+        "capturePending": true,
+        "fullContentAvailable": true
+      },
+      "valid": true
+    }
+  ]
+}
