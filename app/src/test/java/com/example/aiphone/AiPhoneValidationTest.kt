@@ -49,7 +49,7 @@ class AiPhoneValidationTest {
         assertTrue(r.getBoolean("ok"))
         assertEquals("discover",r.getString("method"))
         val result=r.getJSONObject("result")
-        assertEquals("97f9ffd140da36aeec750f897cfe31687bc17cf48df260b1ad9e0b48bca6eafa",result.getString("schemaSha256"))
+        assertEquals("d87943ccc6013f57547b4cca2c02296ea2b40460e2785a1e9a122e9d823b2f11",result.getString("schemaSha256"))
         assertTrue(result.getJSONObject("schema").getJSONObject("\$defs").has("fileParams"))
     }
     @Test fun mismatchedRequestIdsNeverDispatch() {

@@ -576,6 +576,17 @@
         },
         "mode": {
           "const": "full"
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "captured",
+            "resident",
+            "stale"
+          ]
+        },
+        "capturePending": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -645,7 +656,8 @@
               "files",
               "watch",
               "power",
-              "home"
+              "home",
+              "snapshot"
             ]
           }
         },
@@ -821,6 +833,17 @@
         },
         "mode": {
           "const": "summary"
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "captured",
+            "resident",
+            "stale"
+          ]
+        },
+        "capturePending": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -3197,6 +3220,91 @@
         "result"
       ],
       "additionalProperties": false
+    },
+    "snapshotParams": {
+      "type": "object",
+      "properties": {
+        "displayId": {
+          "type": "integer"
+        },
+        "windowId": {
+          "type": "integer"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "snapshotResult": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "const": "broker_event_cache"
+        },
+        "cached": {
+          "const": true
+        },
+        "observedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readAt": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "connection": {
+          "enum": [
+            "online",
+            "offline",
+            "recovering",
+            "unavailable"
+          ]
+        },
+        "brokerInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transportGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "cached",
+        "observedAt",
+        "readAt",
+        "available",
+        "stale",
+        "connection",
+        "brokerInstanceId",
+        "transportGeneration",
+        "state"
+      ],
+      "additionalProperties": false
     }
   },
   "x-transport": {
@@ -3234,6 +3342,14 @@
       "result": {
         "$ref": "#/$defs/homeResult"
       }
+    },
+    "snapshot": {
+      "params": {
+        "$ref": "#/$defs/snapshotParams"
+      },
+      "result": {
+        "$ref": "#/$defs/snapshotResult"
+      }
     }
   },
   "x-runtimeValidation": [
@@ -3247,11 +3363,12 @@
     "mkdir/remove use actual executor, observed outcome and durable mutation identity; no path allowlist",
     "Native home resolves actual default launcher and requests ActivityOptions target display without any global fallback; observed placement independently verified",
     "Untargeted global act requires explicit scope=device; terminal row Home never dispatches device action; plain H uses targeted home or unavailable",
-    "Power backend combines proven global wake with lease-owned nonfocusable/nontouchable accessibility-overlay hold on display0; holdDisplayId describes backend scope, not caller-targeted wake. backendHeld reflects actual required backend resources, not screen-lock ownership alone."
+    "Power backend combines proven global wake with lease-owned nonfocusable/nontouchable accessibility-overlay hold on display0; holdDisplayId describes backend scope, not caller-targeted wake. backendHeld reflects actual required backend resources, not screen-lock ownership alone.",
+    "Broker-local snapshot never dispatches native observe; source=broker_event_cache, cached=true, original observedAt and actual readAt remain distinct",
+    "Snapshot available=false requires null state; an absent/unavailable current capture never becomes fresh success",
+    "Snapshot connection/transportGeneration/stale guard native epochs; filtered resident state cannot replace full all-display cache",
+    "Native observe full performs fresh selected-scope capture; summary may return resident data only with original observedAt, freshness=resident and actual capturePending",
+    "Observation freshness/capturePending are typed optional fields for preserved historical frames; new APK emits them explicitly, and no absence implies fresh capture"
   ],
-  "x-release": {
-    "versionName": "0.1.21",
-    "versionCode": 21,
-    "ciRunNumberIndependent": true
-  }
+  "x-release": "0.1.22"
 }

@@ -14,10 +14,10 @@ import org.robolectric.annotation.Config
 class WireSchemaTest {
     @Test fun authoritativeFixturesAndExactHash() {
         val wire=WireSchema(ApplicationProvider.getApplicationContext<Context>())
-        assertEquals("97f9ffd140da36aeec750f897cfe31687bc17cf48df260b1ad9e0b48bca6eafa",wire.sha256)
+        assertEquals("d87943ccc6013f57547b4cca2c02296ea2b40460e2785a1e9a122e9d823b2f11",wire.sha256)
         try { wire.validate(JSONObject("""{"type":"helloAck","protocol":"ai-phone/1","brokerInstanceId":"old"}"""));fail("Old protocol accepted") } catch(_:IllegalArgumentException) { }
         val fixtures=JSONObject(javaClass.classLoader!!.getResourceAsStream("ai-phone-examples.json")!!.bufferedReader().use {it.readText()}).getJSONArray("cases")
-        assertEquals(60,fixtures.length())
+        assertEquals(70,fixtures.length())
         for(i in 0 until fixtures.length()) {
             val case=fixtures.getJSONObject(i)
             val valid=try {wire.validate(case.get("value"),case.getString("definition"));true} catch(_:IllegalArgumentException) {false}

@@ -16,9 +16,13 @@ internal class NativeNodeHandles {
     private var pending = linkedMapOf<Identity, String>()
     private var next = BigInteger.ZERO
 
-    fun beginCapture() {
+    fun beginCapture(retain: Set<Pair<Int, Int>> = emptySet()) {
         pending.keys.forEach { it.node.recycle() }
         pending.clear()
+        current.forEach { (key, value) ->
+            if ((key.display to key.window) in retain)
+                pending[Identity(key.display, key.window, AccessibilityNodeInfo.obtain(key.node))] = value
+        }
     }
 
     fun id(display: Int, window: Int, node: AccessibilityNodeInfo): String {
@@ -33,6 +37,11 @@ internal class NativeNodeHandles {
         current.keys.forEach { it.node.recycle() }
         current = pending
         pending = linkedMapOf()
+    }
+
+    fun abortCapture() {
+        pending.keys.forEach { it.node.recycle() }
+        pending.clear()
     }
 
     fun resetEpoch() {

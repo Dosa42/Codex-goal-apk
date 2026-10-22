@@ -1,6 +1,6 @@
 {
   "schema": "protocol.schema.json",
-  "description": "Validation fixtures only; synthetic shapes are never actual device observations. Protocol2 adds explicitly global power ownership and actual executor mkdir/remove.",
+  "description": "Validation fixtures only; synthetic shapes are never actual device observations. Protocol2 adds explicitly global power ownership and actual executor mkdir/remove. Release0.1.22 adds typed resident snapshot/freshness fixtures; timestamps and values are synthetic validation data only.",
   "cases": [
     {
       "name": "observe_request",
@@ -1078,6 +1078,238 @@
         "holdDisplayId": 0
       },
       "valid": false
+    },
+    {
+      "name": "snapshot_full_resident",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "snapshot_unavailable",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": null,
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": false,
+        "stale": true,
+        "connection": "offline",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": null
+      },
+      "valid": true
+    },
+    {
+      "name": "snapshot_empty_params",
+      "definition": "snapshotParams",
+      "value": {},
+      "valid": true
+    },
+    {
+      "name": "snapshot_cached_false",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": false,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_bad_generation",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": true,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_bad_stale_type",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": "false",
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1,
+        "state": {
+          "serviceInstanceId": "fixture-epoch",
+          "revision": 2,
+          "observedAt": "2026-10-21T20:00:00Z",
+          "source": "android_accessibility",
+          "mode": "full",
+          "displays": [
+            {
+              "id": 0
+            }
+          ],
+          "windows": [],
+          "nodes": [],
+          "unavailable": [],
+          "freshness": "captured",
+          "capturePending": false
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "snapshot_missing_state",
+      "definition": "snapshotResult",
+      "value": {
+        "source": "broker_event_cache",
+        "cached": true,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "readAt": "2026-10-22T00:00:01Z",
+        "available": true,
+        "stale": false,
+        "connection": "online",
+        "brokerInstanceId": "fixture-broker",
+        "transportGeneration": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "observation_bad_freshness",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "nodes": [],
+        "unavailable": [],
+        "freshness": "instant",
+        "capturePending": false
+      },
+      "valid": false
+    },
+    {
+      "name": "observation_bad_pending_type",
+      "definition": "state",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "full",
+        "displays": [
+          {
+            "id": 0
+          }
+        ],
+        "windows": [],
+        "nodes": [],
+        "unavailable": [],
+        "freshness": "captured",
+        "capturePending": "false"
+      },
+      "valid": false
+    },
+    {
+      "name": "summary_resident_with_pending",
+      "definition": "summary",
+      "value": {
+        "serviceInstanceId": "fixture-epoch",
+        "revision": 2,
+        "observedAt": "2026-10-21T20:00:00Z",
+        "source": "android_accessibility",
+        "mode": "summary",
+        "windows": [],
+        "nodes": [],
+        "freshness": "resident",
+        "capturePending": true,
+        "fullContentAvailable": true
+      },
+      "valid": true
     }
   ]
 }

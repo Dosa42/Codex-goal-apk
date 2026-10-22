@@ -16,8 +16,8 @@ android {
     applicationId = "com.dosa42.codexgoal"
     minSdk = 24
     targetSdk = 36
-    versionCode = 21
-    versionName = "0.1.21"
+    versionCode = 22
+    versionName = "0.1.22"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

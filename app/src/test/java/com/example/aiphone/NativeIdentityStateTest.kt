@@ -91,8 +91,10 @@ class NativeIdentityStateTest {
         root(a);capture(false)
         val oldId=nodeId("Open");val oldRevision=state().getLong("revision")
         root(b)
-        val result=act(oldId,oldRevision) // Production act captures replacement before its stale check.
+        val result=act(oldId,oldRevision) // Production act checks live native root identity without traversing its children.
         assertFalse(result.getBoolean("ok"));assertEquals("stale_handle",result.getJSONObject("error").getString("code"))
+        assertEquals("Fast rejection does not pretend a new capture occurred",oldRevision,state().getLong("revision"))
+        capture(false)
         assertNotEquals(oldId,nodeId("Open"));assertTrue(state().getLong("revision")>oldRevision)
         assertTrue("Replacement must not receive old request",shadowOf(b).performedActions.isEmpty())
         val currentRevision=state().getLong("revision")
